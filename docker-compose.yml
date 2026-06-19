@@ -1,0 +1,11 @@
+services:
+  bookhub:
+    build: .
+    container_name: bookhub
+    ports:
+      - "8001:8001"
+    env_file:
+      - .env
+    environment:
+      APP_PORT: "8001"
+    restart: unless-stopped

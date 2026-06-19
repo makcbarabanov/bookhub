@@ -1,0 +1,21 @@
+---
+description: Sync Readme/Tables.md when database schema changes
+globs: _sql/**/*.sql,database.py
+alwaysApply: false
+---
+
+# Database schema documentation
+
+When you add or change PostgreSQL schema in BookHub:
+
+1. Add a new additive migration in `_sql/` (next number: `005_`, `006_`, …).
+2. **Update `Readme/Tables.md` in the same change:**
+   - new/altered tables and columns (types, FK, indexes, uniqueness)
+   - migration file reference
+   - move rows from «Планируемые таблицы» to the main section when implemented
+   - bump «Последнее обновление» date
+3. Update `database.py` / API if the app uses the new structure.
+
+Do not merge SQL migrations without updating `Readme/Tables.md`.
+
+Connection for audits: database `bookhub_prod`, schema `public`, host from `.env` (`DB_HOST`).

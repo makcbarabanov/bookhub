@@ -1,0 +1,41 @@
+---
+description: BookHub UI standards — follow Readme/style.md when changing frontend
+globs: static/**/*
+alwaysApply: true
+---
+
+# Frontend style guide
+
+When you add or change UI in BookHub (`static/index.html`, `static/bookhub.js`, future CSS):
+
+1. **Read and follow `Readme/style.md`** — design tokens, typography, buttons, panels.
+2. **Update `Readme/style.md`** in the same change if you introduce a new reusable pattern (component class, modal variant, semantic color).
+
+## No native browser dialogs
+
+**Never** use `window.alert`, `window.confirm`, or `window.prompt` for user-facing messages.
+
+| Need | Use instead |
+|------|-------------|
+| Info / success / error message | `showAppNotice({ message, variant, title? })` → `#app-notice-modal` |
+| Confirm destructive action | `.modal-overlay` + `.modal-box--danger` (see `#delete-modal`) |
+| Confirm with diff / custom body | Dedicated modal (see `#ai-fix-modal`) |
+
+## Modals (strict)
+
+All modal dialogs **must** use the shared pattern:
+
+- Outer: `.modal-overlay` (`role="dialog"`, `aria-modal="true"`, `aria-labelledby`)
+- Inner: `.modal-box` (+ optional `--danger`, `--success`, `--profile`)
+- Actions: `.modal-actions` with cancel + `.btn-primary` or `.btn-danger`
+
+Do **not** invent separate overlay/modal CSS. Reuse existing modal IDs as reference.
+
+Exception: `#login-overlay` — full-screen auth; keep visually aligned with modal-box (see style.md §4).
+
+## General
+
+- Colors via CSS variables (`--accent-amber`, `--bg-panel`, …), support dark + light themes.
+- Fonts: **Inter** (UI), **Playfair Display** (headings).
+- Buttons: reuse existing classes before adding new ones.
+- Russian UI copy unless the feature is explicitly English-only.
