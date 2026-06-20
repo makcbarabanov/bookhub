@@ -4,3 +4,5 @@ __pycache__/
 .env
 .venv/
 venv/
+media/bookhub/heroes/*
+!media/bookhub/heroes/.gitkeep

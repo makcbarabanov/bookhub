@@ -19,14 +19,19 @@ from pydantic import BaseModel, Field
 
 from auth_util import verify_password
 from ai_advisor import analyze_book, apply_text_fix, verify_errors_against_chapters
-from ai_assistant import chat_reply, summarize_book_memory, welcome_message
+from ai_assistant import chat_reply, format_characters_canon, summarize_book_memory, welcome_message
 from database import (
     ACT_LABEL_LABELS,
     count_ai_refresh_since,
     count_chat_send_since,
+    delete_book_character,
+    delete_book_note,
+    delete_chat_messages,
     ensure_book_service,
     fetch_book,
     fetch_book_analysis,
+    fetch_book_character,
+    fetch_book_characters,
     fetch_book_note,
     fetch_book_notes,
     fetch_book_ai_summary,
@@ -45,10 +50,15 @@ from database import (
     get_active_book_id,
     get_conn,
     insert_book_note,
+    insert_book_character,
     insert_chat_message,
     log_ai_usage,
     run_migrations,
     update_book_ai_summary,
+    update_book_character,
+    update_book_character_avatar,
+    update_book_note,
+    upsert_book_character_by_name,
     set_active_book_id,
     update_book_service_checklist,
     update_book_service_heroes,
@@ -58,12 +68,26 @@ from database import (
     update_user_profile,
     user_has_book_access,
 )
-from service_analyzer import generate_heroes_text, generate_plot_json, plot_json_loads
-from export_util import build_docx_export, build_html_export, build_pdf_export
+from service_analyzer import (
+    generate_characters_from_chapters,
+    generate_heroes_text,
+    generate_plot_json,
+    mention_count_for_character,
+    is_garbage_character_name,
+    plot_json_loads,
+)
+from notes_migrate import (
+    delete_morpheus_junk_notes,
+    format_notes_for_ai,
+    migrate_checklist_html_to_notes,
+    ensure_checklist_section,
+    normalize_notes_sort_order,
+    repair_blob_checklist_note,
+)
 from parser import parse_book_html
 from stats_util import measure_html, sum_measures
 
-APP_VERSION = os.environ.get("APP_VERSION", "16:30")
+APP_VERSION = os.environ.get("APP_VERSION", "17:45")
 APP_PORT = int(os.environ.get("APP_PORT", "8001"))
 SESSION_COOKIE = "bookhub_session"
 SESSION_MAX_AGE = 60 * 60 * 24 * 30
@@ -76,6 +100,10 @@ CHAT_RATE_LIMIT = int(os.environ.get("CHAT_RATE_LIMIT", "45"))
 CHAT_RATE_WINDOW_HOURS = 1
 CHAT_MAX_MESSAGE_LEN = 4000
 CHAT_HISTORY_LIMIT = 10
+MEDIA_ROOT = os.path.join(os.path.dirname(__file__), "media")
+HEROES_MEDIA_DIR = os.path.join(MEDIA_ROOT, "bookhub", "heroes")
+ALLOWED_AVATAR_TYPES = {"image/jpeg", "image/png", "image/jpg"}
+MAX_AVATAR_BYTES = 5 * 1024 * 1024
 
 app = FastAPI(title="BookHub", version="0.2")
 
@@ -245,6 +273,26 @@ class ChatSendBody(BaseModel):
     message: str = Field(..., min_length=1, max_length=CHAT_MAX_MESSAGE_LEN)
 
 
+class ChatClearBody(BaseModel):
+    reset_summary: bool = True
+
+
+class NotePatchBody(BaseModel):
+    title: str = Field(..., min_length=1, max_length=255)
+    content: str = ""
+
+
+class CharacterBody(BaseModel):
+    id: int | None = None
+    name: str = Field(..., min_length=1, max_length=120)
+    role_type: str = Field(default="secondary", pattern="^(protagonist|antagonist|secondary)$")
+    summary: str = Field(..., min_length=1, max_length=300)
+    bio: str = ""
+    relations_json: dict[str, str] = Field(default_factory=dict)
+    first_ch_id: str | None = Field(default=None, max_length=10)
+    color: str = Field(default="#888888", max_length=7)
+
+
 def _format_dt(value) -> str | None:
     if not value:
         return None
@@ -317,9 +365,76 @@ def _note_payload(row: dict[str, Any]) -> dict[str, Any]:
         "book_id": row.get("book_id"),
         "title": row.get("title"),
         "content": row.get("content"),
+        "sort_order": row.get("sort_order") or 0,
+        "is_section": bool(row.get("is_section")),
         "created_at": _format_dt(row.get("created_at")),
         "updated_at": _format_dt(row.get("updated_at")),
     }
+
+
+def _notes_context_for_ai(conn, book_id: int, service: dict[str, Any] | None) -> str:
+    notes = fetch_book_notes(conn, book_id)
+    if notes:
+        return format_notes_for_ai(notes)
+    if service and (service.get("checklist_html") or "").strip():
+        return html_to_plain(service.get("checklist_html") or "")[:12000]
+    return ""
+
+
+def _relations_dict(raw: Any) -> dict[str, str]:
+    if isinstance(raw, dict):
+        return {str(k): str(v) for k, v in raw.items()}
+    if isinstance(raw, str):
+        import json
+
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                return {str(k): str(v) for k, v in data.items()}
+        except json.JSONDecodeError:
+            pass
+    return {}
+
+
+def _character_payload(row: dict[str, Any], mention_count: int | None = None) -> dict[str, Any]:
+    payload = {
+        "id": row.get("id"),
+        "book_id": row.get("book_id"),
+        "name": row.get("name"),
+        "role_type": row.get("role_type"),
+        "summary": row.get("summary"),
+        "bio": row.get("bio") or "",
+        "relations_json": _relations_dict(row.get("relations_json")),
+        "first_ch_id": row.get("first_ch_id"),
+        "color": row.get("color") or "#888888",
+        "avatar_url": row.get("avatar_url"),
+        "created_at": _format_dt(row.get("created_at")),
+        "updated_at": _format_dt(row.get("updated_at")),
+    }
+    if mention_count is not None:
+        payload["mention_count"] = mention_count
+    return payload
+
+
+def _characters_with_mentions(
+    conn, book_id: int, rows: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    chapters = fetch_chapters_full(conn, book_id)
+    return [
+        _character_payload(
+            row,
+            mention_count_for_character(chapters, str(row.get("name") or "")),
+        )
+        for row in rows
+    ]
+
+
+def _heroes_context_for_ai(conn, book_id: int, service: dict[str, Any] | None) -> str:
+    characters = fetch_book_characters(conn, book_id)
+    canon = format_characters_canon(characters)
+    if canon:
+        return canon
+    return (service.get("heroes_text") if service else "") or ""
 
 
 def _refresh_summary_background(book_id: int, user_id: int) -> None:
@@ -466,6 +581,25 @@ def _login_handler(body: LoginBody, response: Response, request: Request) -> dic
 @app.on_event("startup")
 def on_startup() -> None:
     run_migrations()
+    _migrate_all_book_notes()
+
+
+def _migrate_all_book_notes() -> None:
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT id FROM books WHERE is_archived = FALSE ORDER BY id"
+        ).fetchall()
+        for row in rows:
+            book_id = int(row["id"])
+            delete_morpheus_junk_notes(conn, book_id)
+            service = fetch_book_service(conn, book_id)
+            if service and (service.get("checklist_html") or "").strip():
+                migrate_checklist_html_to_notes(
+                    conn, book_id, service.get("checklist_html") or ""
+                )
+            repair_blob_checklist_note(conn, book_id)
+            ensure_checklist_section(conn, book_id)
+            normalize_notes_sort_order(conn, book_id)
 
 
 @app.get("/health")
@@ -756,8 +890,152 @@ def refresh_service_heroes(user_id: int = Depends(verify_user_id)) -> dict[str, 
         chapters = fetch_chapters_full(conn, book_id)
         heroes_text = generate_heroes_text(chapters)
         update_book_service_heroes(conn, book_id, heroes_text)
+        for ch in generate_characters_from_chapters(chapters):
+            upsert_book_character_by_name(
+                conn,
+                book_id,
+                ch["name"],
+                ch["role_type"],
+                ch["summary"],
+                ch.get("bio") or "",
+                ch.get("relations_json") or {},
+                ch.get("first_ch_id"),
+                ch.get("color") or "#888888",
+            )
+        for row in fetch_book_characters(conn, book_id):
+            if is_garbage_character_name(str(row.get("name") or "")):
+                delete_book_character(conn, book_id, int(row["id"]))
         service = fetch_book_service(conn, book_id)
-    return {"ok": True, "service": _service_payload(service)}
+        characters = fetch_book_characters(conn, book_id)
+        payload_characters = _characters_with_mentions(conn, book_id, characters)
+    return {
+        "ok": True,
+        "service": _service_payload(service),
+        "characters": payload_characters,
+    }
+
+
+@app.get("/api/v1/book/characters")
+def list_book_characters(user_id: int = Depends(verify_user_id)) -> dict[str, Any]:
+    with get_conn() as conn:
+        book_id = get_active_book_id(conn, user_id)
+        if not book_id:
+            raise HTTPException(status_code=404, detail="No books available")
+        _require_book_access(conn, user_id, book_id)
+        rows = fetch_book_characters(conn, book_id)
+        payload_characters = _characters_with_mentions(conn, book_id, rows)
+    return {
+        "ok": True,
+        "book_id": book_id,
+        "characters": payload_characters,
+    }
+
+
+@app.post("/api/v1/book/characters")
+def save_book_character(
+    body: CharacterBody, user_id: int = Depends(verify_user_id)
+) -> dict[str, Any]:
+    with get_conn() as conn:
+        book_id = get_active_book_id(conn, user_id)
+        if not book_id:
+            raise HTTPException(status_code=404, detail="No books available")
+        _require_book_access(conn, user_id, book_id)
+        if body.id:
+            row = update_book_character(
+                conn,
+                book_id,
+                body.id,
+                name=body.name.strip(),
+                role_type=body.role_type,
+                summary=body.summary.strip(),
+                bio=body.bio or "",
+                relations=body.relations_json,
+                first_ch_id=(body.first_ch_id or "").strip() or None,
+                color=body.color or "#888888",
+            )
+            if not row:
+                raise HTTPException(status_code=404, detail="Character not found")
+        else:
+            row = insert_book_character(
+                conn,
+                book_id,
+                body.name.strip(),
+                body.role_type,
+                body.summary.strip(),
+                body.bio or "",
+                body.relations_json,
+                (body.first_ch_id or "").strip() or None,
+                body.color or "#888888",
+            )
+        chapters = fetch_chapters_full(conn, book_id)
+        mention_count = mention_count_for_character(chapters, str(row.get("name") or ""))
+    return {"ok": True, "character": _character_payload(row, mention_count=mention_count)}
+
+
+@app.delete("/api/v1/book/characters/{character_id}")
+def remove_book_character(
+    character_id: int, user_id: int = Depends(verify_user_id)
+) -> dict[str, Any]:
+    with get_conn() as conn:
+        book_id = get_active_book_id(conn, user_id)
+        if not book_id:
+            raise HTTPException(status_code=404, detail="No books available")
+        _require_book_access(conn, user_id, book_id)
+        existing = fetch_book_character(conn, book_id, character_id)
+        if not existing:
+            raise HTTPException(status_code=404, detail="Character not found")
+        avatar_url = existing.get("avatar_url") or ""
+        if not delete_book_character(conn, book_id, character_id):
+            raise HTTPException(status_code=404, detail="Character not found")
+
+    if avatar_url.startswith("/media/bookhub/heroes/"):
+        filename = avatar_url.rsplit("/", 1)[-1]
+        filepath = os.path.join(HEROES_MEDIA_DIR, filename)
+        if os.path.isfile(filepath):
+            try:
+                os.remove(filepath)
+            except OSError:
+                pass
+
+    return {"ok": True, "deleted_id": character_id}
+
+
+@app.post("/api/v1/book/characters/{character_id}/upload-avatar")
+async def upload_character_avatar(
+    character_id: int,
+    file: UploadFile = File(...),
+    user_id: int = Depends(verify_user_id),
+) -> dict[str, Any]:
+    content_type = (file.content_type or "").lower()
+    if content_type not in ALLOWED_AVATAR_TYPES:
+        raise HTTPException(status_code=400, detail="Only JPG and PNG images are allowed")
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty file")
+    if len(data) > MAX_AVATAR_BYTES:
+        raise HTTPException(status_code=400, detail="File too large (max 5 MB)")
+
+    ext = ".jpg" if "jpeg" in content_type or content_type == "image/jpg" else ".png"
+    os.makedirs(HEROES_MEDIA_DIR, exist_ok=True)
+    filename = f"book{character_id}_{int(time.time())}{ext}"
+
+    with get_conn() as conn:
+        book_id = get_active_book_id(conn, user_id)
+        if not book_id:
+            raise HTTPException(status_code=404, detail="No books available")
+        _require_book_access(conn, user_id, book_id)
+        existing = fetch_book_character(conn, book_id, character_id)
+        if not existing:
+            raise HTTPException(status_code=404, detail="Character not found")
+        filename = f"book{book_id}_char{character_id}_{int(time.time())}{ext}"
+        filepath = os.path.join(HEROES_MEDIA_DIR, filename)
+        with open(filepath, "wb") as f:
+            f.write(data)
+        avatar_url = f"/media/bookhub/heroes/{filename}"
+        row = update_book_character_avatar(conn, book_id, character_id, avatar_url)
+
+    return {"ok": True, "character": _character_payload(row)}
 
 
 @app.post("/api/v1/book/service/plot/refresh")
@@ -810,11 +1088,12 @@ def refresh_ai_analysis(user_id: int = Depends(verify_user_id)) -> dict[str, Any
         service = fetch_book_service(conn, book_id)
 
         try:
+            notes_ctx = _notes_context_for_ai(conn, book_id, service)
             analysis, model, tokens_in, tokens_out = analyze_book(
                 book["title"],
                 chapters,
-                service.get("checklist_html") or "",
-                service.get("heroes_text") or "",
+                notes_ctx,
+                _heroes_context_for_ai(conn, book_id, service),
             )
         except RuntimeError as e:
             raise HTTPException(status_code=502, detail=str(e)) from e
@@ -982,26 +1261,18 @@ def ai_idea_to_checklist(
         analysis["plot_ideas"] = new_ideas
         row = update_book_analysis_json(conn, book_id, analysis)
 
-        service = fetch_book_service(conn, book_id)
-        checklist_html = (service.get("checklist_html") if service else "") or ""
         ch_part = ""
         if body.related_ch_ids:
-            ch_part = (
-                "<p><em>Главы: "
-                + ", ".join(html_module.escape(c) for c in body.related_ch_ids)
-                + "</em></p>"
-            )
-        block = (
-            '<div class="atlas-note"><h4>💡 Идея ИИ</h4>'
-            f"<p>⏳ {html_module.escape(idea_text)}</p>{ch_part}</div>"
-        )
-        update_book_service_checklist(conn, book_id, checklist_html + "\n" + block)
-        service = fetch_book_service(conn, book_id)
+            ch_part = "Главы: " + ", ".join(body.related_ch_ids)
+        content = idea_text
+        if ch_part:
+            content = idea_text + "\n\n" + ch_part
+        note_row = insert_book_note(conn, book_id, "💡 Идея ИИ", content)
 
     return {
         "ok": True,
         "ai_analysis": _analysis_payload(row),
-        "service": _service_payload(service),
+        "note": _note_payload(note_row),
     }
 
 
@@ -1022,6 +1293,32 @@ def get_book_chat(user_id: int = Depends(verify_user_id)) -> dict[str, Any]:
     return {
         "ok": True,
         "messages": [_chat_msg_payload(m) for m in messages],
+        "author_name": author,
+    }
+
+
+@app.post("/api/v1/book/chat/clear")
+def clear_book_chat(
+    body: ChatClearBody = ChatClearBody(),
+    user_id: int = Depends(verify_user_id),
+) -> dict[str, Any]:
+    with get_conn() as conn:
+        book_id = get_active_book_id(conn, user_id)
+        if not book_id:
+            raise HTTPException(status_code=404, detail="No books available")
+        _require_book_access(conn, user_id, book_id)
+        deleted = delete_chat_messages(conn, book_id)
+        if body.reset_summary:
+            update_book_ai_summary(conn, book_id, "")
+        profile = fetch_user_profile_row(conn, user_id)
+        author = _author_display_name(profile)
+        welcome = welcome_message(author)
+        row = insert_chat_message(conn, book_id, "ai", welcome)
+    return {
+        "ok": True,
+        "deleted_messages": deleted,
+        "summary_reset": body.reset_summary,
+        "messages": [_chat_msg_payload(row)],
         "author_name": author,
     }
 
@@ -1049,6 +1346,7 @@ def send_book_chat(
         profile = fetch_user_profile_row(conn, user_id)
         author = _author_display_name(profile)
         ai_summary = fetch_book_ai_summary(conn, book_id)
+        characters = fetch_book_characters(conn, book_id)
         history = fetch_chat_messages_recent(conn, book_id, CHAT_HISTORY_LIMIT)
 
         user_row = insert_chat_message(conn, book_id, "user", text)
@@ -1058,6 +1356,7 @@ def send_book_chat(
                 author,
                 book["title"],
                 ai_summary,
+                characters,
                 history,
                 text,
             )
@@ -1108,6 +1407,41 @@ def get_book_note(note_id: int, user_id: int = Depends(verify_user_id)) -> dict[
         if not note:
             raise HTTPException(status_code=404, detail="Note not found")
     return {"ok": True, "note": _note_payload(note)}
+
+
+@app.patch("/api/v1/book/notes/{note_id}")
+def patch_book_note(
+    note_id: int,
+    body: NotePatchBody,
+    user_id: int = Depends(verify_user_id),
+) -> dict[str, Any]:
+    with get_conn() as conn:
+        book_id = get_active_book_id(conn, user_id)
+        if not book_id:
+            raise HTTPException(status_code=404, detail="No books available")
+        _require_book_access(conn, user_id, book_id)
+        row = update_book_note(
+            conn,
+            book_id,
+            note_id,
+            body.title.strip(),
+            body.content or "",
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Note not found")
+    return {"ok": True, "note": _note_payload(row)}
+
+
+@app.delete("/api/v1/book/notes/{note_id}")
+def remove_book_note(note_id: int, user_id: int = Depends(verify_user_id)) -> dict[str, Any]:
+    with get_conn() as conn:
+        book_id = get_active_book_id(conn, user_id)
+        if not book_id:
+            raise HTTPException(status_code=404, detail="No books available")
+        _require_book_access(conn, user_id, book_id)
+        if not delete_book_note(conn, book_id, note_id):
+            raise HTTPException(status_code=404, detail="Note not found")
+    return {"ok": True, "deleted_id": note_id}
 
 
 @app.patch("/api/v1/chapters/{ch_id}")
@@ -1415,6 +1749,10 @@ async def import_draft(
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 if os.path.isdir(static_dir):
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+os.makedirs(HEROES_MEDIA_DIR, exist_ok=True)
+if os.path.isdir(MEDIA_ROOT):
+    app.mount("/media", StaticFiles(directory=MEDIA_ROOT), name="media")
 
 
 @app.get("/")

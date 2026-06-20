@@ -1,8 +1,8 @@
 <!DOCTYPE html>
-<html lang="ru" data-app-version="16:30" data-theme="dark"><head>
+<html lang="ru" data-app-version="17:35" data-theme="dark"><head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="app-version" content="16:30">
+    <meta name="app-version" content="17:35">
     <title>14:45 — BookHub</title>
     <link rel="icon" href="favicon.svg" type="image/svg+xml">
     <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600&amp;family=Inter:wght@300;400;600&amp;display=swap" rel="stylesheet">
@@ -10,6 +10,7 @@
         :root,
         [data-theme="dark"] {
             --bg-dark: #0f0f11;
+            --bg-main: #0f0f11;
             --bg-panel: #1a1a1d;
             --text-main: #e0e0e0;
             --text-muted: #888888;
@@ -18,9 +19,12 @@
             --accent-green: #4caf50;
             --border: #333333;
             --sidebar-width: 350px;
+            --sidebar-toolbar-h: 86px;
+            --content-pad-x: 40px;
         }
         [data-theme="light"] {
             --bg-dark: #ececef;
+            --bg-main: #ececef;
             --bg-panel: #ffffff;
             --text-main: #1a1a1d;
             --text-muted: #666666;
@@ -100,9 +104,19 @@
             inset: 0;
             z-index: 550;
             background: rgba(0, 0, 0, 0.72);
-            align-items: center;
+            align-items: flex-start;
             justify-content: center;
-            padding: 20px;
+            padding: 12px;
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
+            box-sizing: border-box;
+        }
+        @media (min-width: 769px) {
+            .modal-overlay {
+                align-items: center;
+                padding: 20px;
+                overflow-y: hidden;
+            }
         }
         .modal-box {
             background: var(--bg-panel);
@@ -133,14 +147,19 @@
         .modal-actions button {
             padding: 8px 16px;
             border-radius: 6px;
-            border: 1px solid #444;
-            background: #2a2a2e;
+            border: 1px solid var(--border);
+            background: var(--bg-panel);
             color: var(--text-main);
             cursor: pointer;
             font-family: inherit;
             font-size: 14px;
+            -webkit-appearance: none;
+            appearance: none;
         }
-        .modal-actions button:hover { border-color: #666; background: #333; }
+        .modal-actions button:not([type="submit"]):not(.btn-primary):not(.btn-danger):hover {
+            border-color: var(--text-muted);
+            background: var(--bg-dark);
+        }
         .modal-actions .btn-danger {
             background: #c62828;
             border-color: #c62828;
@@ -164,12 +183,52 @@
             color: var(--text-muted);
             margin-top: 8px;
         }
+        .modal-box--profile {
             max-width: 480px;
-            width: min(480px, calc(100vw - 40px));
-            max-height: min(90vh, 720px);
+            width: min(480px, calc(100vw - 24px));
+            max-height: min(92dvh, 720px);
+            display: flex;
+            flex-direction: column;
+            padding: 0;
+            overflow: hidden;
+            box-sizing: border-box;
+            margin: auto 0;
+        }
+        @media (min-width: 769px) {
+            .modal-box--profile { margin: 0; }
+        }
+        .modal-box--profile > h3 {
+            flex-shrink: 0;
+            padding: 16px 20px 0;
+            margin: 0 0 8px;
+        }
+        .modal-box--profile #profile-form {
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+            flex: 1;
+            overflow: hidden;
+        }
+        .profile-modal-scroll {
             overflow-x: hidden;
             overflow-y: auto;
-            box-sizing: border-box;
+            padding: 0 20px 12px;
+            flex: 1;
+            min-height: 0;
+            -webkit-overflow-scrolling: touch;
+        }
+        .modal-box--profile .modal-actions {
+            flex-shrink: 0;
+            margin: 0;
+            padding: 12px 20px 16px;
+            border-top: 1px solid var(--border);
+            background: var(--bg-panel);
+            position: sticky;
+            bottom: 0;
+        }
+        [data-theme="light"] .profile-form input,
+        [data-theme="light"] .profile-books-add input {
+            background: #fff;
         }
         .profile-form {
             display: grid;
@@ -218,6 +277,23 @@
             grid-template-columns: repeat(3, 1fr);
             gap: 8px;
             margin-top: 14px;
+        }
+        @media (max-width: 480px) {
+            .profile-form {
+                grid-template-columns: 1fr;
+            }
+            .profile-form label:nth-child(3) {
+                grid-column: auto;
+            }
+            .profile-stats {
+                grid-template-columns: repeat(2, 1fr);
+            }
+            .profile-books-add {
+                flex-direction: column;
+            }
+            .profile-books-add button {
+                width: 100%;
+            }
         }
         .profile-stat {
             padding: 10px;
@@ -377,6 +453,25 @@
             min-height: 420px;
             max-height: calc(100vh - 220px);
         }
+        .ai-chat-toolbar {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+            padding: 0 4px 6px;
+        }
+        .ai-chat-clear {
+            border: 1px solid #444;
+            background: #2a2a2e;
+            color: var(--text-muted);
+            border-radius: 6px;
+            padding: 6px 10px;
+            font-size: 12px;
+            cursor: pointer;
+        }
+        .ai-chat-clear:hover {
+            border-color: var(--accent-amber);
+            color: var(--text-main);
+        }
         .ai-chat-messages {
             flex: 1;
             overflow-y: auto;
@@ -398,11 +493,13 @@
             align-self: flex-end;
             background: rgba(217, 119, 43, 0.18);
             border: 1px solid rgba(217, 119, 43, 0.35);
+            color: var(--text-main);
         }
         .ai-chat-bubble.ai {
             align-self: flex-start;
-            background: #2a2a2e;
+            background: var(--bg-panel);
             border: 1px solid var(--border);
+            color: var(--text-main);
         }
         .ai-chat-input-row {
             display: flex;
@@ -464,6 +561,72 @@
             to { opacity: 1; transform: translateY(0); }
         }
         .book-notes-list { display: flex; flex-direction: column; gap: 8px; }
+        .book-notes-panel .service-panel-header.book-notes-sticky-header {
+            position: sticky;
+            top: 0;
+            z-index: 8;
+            background: var(--bg-dark);
+            margin-bottom: 12px;
+        }
+        .book-note-section-header {
+            position: sticky;
+            top: 0;
+            z-index: 7;
+            background: var(--bg-dark);
+            padding: 10px 0 8px;
+            margin: 8px 0 4px;
+            border-bottom: 1px solid var(--border);
+            font-family: 'Playfair Display', serif;
+            font-size: 20px;
+            color: var(--accent-amber);
+        }
+        .book-note-row {
+            display: flex;
+            gap: 10px;
+            align-items: flex-start;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 10px 12px;
+            background: rgba(255,255,255,0.02);
+        }
+        .book-note-num {
+            flex-shrink: 0;
+            font-size: 13px;
+            color: var(--text-muted);
+            min-width: 28px;
+            font-variant-numeric: tabular-nums;
+        }
+        .book-note-body { flex: 1; min-width: 0; }
+        .book-note-body h4 {
+            margin: 0 0 4px;
+            color: var(--accent-amber);
+            font-size: 15px;
+        }
+        .book-note-body p {
+            margin: 0;
+            font-size: 13px;
+            color: var(--text-muted);
+            line-height: 1.45;
+        }
+        .book-note-actions {
+            display: flex;
+            gap: 4px;
+            flex-shrink: 0;
+        }
+        .book-note-actions button {
+            border: 1px solid var(--border);
+            background: transparent;
+            color: var(--text-muted);
+            border-radius: 6px;
+            padding: 4px 8px;
+            cursor: pointer;
+            font-size: 12px;
+            line-height: 1;
+        }
+        .book-note-actions button:hover {
+            border-color: var(--accent-amber);
+            color: var(--accent-amber);
+        }
         .book-note-item {
             border: 1px solid var(--border);
             border-radius: 8px;
@@ -482,6 +645,133 @@
             line-height: 1.55;
         }
         .book-note-view h3 { margin: 0 0 12px; color: var(--accent-amber); }
+        .heroes-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+            gap: 14px;
+            margin-top: 8px;
+        }
+        .hero-card {
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 14px;
+            background: rgba(255,255,255,0.02);
+            display: flex;
+            gap: 12px;
+            align-items: flex-start;
+            position: relative;
+            transition: border-color 0.2s;
+        }
+        .hero-card:hover { border-color: var(--accent-amber); }
+        .hero-avatar {
+            width: 52px;
+            height: 52px;
+            border-radius: 10px;
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            font-size: 16px;
+            color: #fff;
+            overflow: hidden;
+            background-size: cover;
+            background-position: center;
+        }
+        .hero-card-body { flex: 1; min-width: 0; }
+        .hero-card-body h4 {
+            margin: 0 0 4px;
+            color: var(--accent-amber);
+            font-size: 15px;
+        }
+        .hero-role {
+            display: inline-block;
+            font-size: 11px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            margin-bottom: 6px;
+        }
+        .hero-summary {
+            margin: 0;
+            font-size: 13px;
+            line-height: 1.45;
+            color: var(--text-main);
+            overflow-wrap: anywhere;
+            word-break: break-word;
+        }
+        .hero-ch {
+            margin: 6px 0 0;
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+        .hero-mentions {
+            margin: 6px 0 0;
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+        .hero-mentions--zero {
+            color: var(--accent-amber);
+            opacity: 0.85;
+        }
+        .hero-edit-btn {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            border: 1px solid #444;
+            background: #2a2a2e;
+            color: var(--text-main);
+            border-radius: 6px;
+            width: 32px;
+            height: 28px;
+            cursor: pointer;
+            font-size: 14px;
+            line-height: 1;
+        }
+        .hero-edit-btn:hover { border-color: var(--accent-amber); }
+        .btn-add-hero {
+            border: 1px dashed var(--border);
+            background: transparent;
+            color: var(--text-muted);
+            border-radius: 8px;
+            padding: 8px 14px;
+            font-size: 13px;
+            cursor: pointer;
+            font-family: inherit;
+        }
+        .btn-add-hero:hover {
+            border-color: var(--accent-amber);
+            color: var(--accent-amber);
+        }
+        .hero-form-grid {
+            display: grid;
+            gap: 12px;
+        }
+        .hero-form-grid label {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+        .hero-form-grid input,
+        .hero-form-grid select,
+        .hero-form-grid textarea {
+            border: 1px solid var(--border);
+            background: var(--bg-dark);
+            color: var(--text-main);
+            border-radius: 6px;
+            padding: 8px 10px;
+            font-family: inherit;
+            font-size: 14px;
+        }
+        .hero-form-grid textarea { min-height: 80px; resize: vertical; }
+        .hero-form-row {
+            display: grid;
+            grid-template-columns: 1fr 100px;
+            gap: 12px;
+        }
+        .modal-box--hero { max-width: 520px; }
         .analysis-panel-tools { display: none; }
         .analysis-panel-tools.visible { display: block; }
         .ai-tabs {
@@ -490,20 +780,59 @@
             flex-wrap: wrap;
             margin-bottom: 16px;
         }
-        .ai-tab {
-            border: 1px solid #444;
-            background: transparent;
+        .ai-tabs-inline {
+            flex-wrap: nowrap;
+            gap: 0;
+            align-items: baseline;
+            margin-bottom: 0;
+            flex: 1;
+            min-width: 0;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+            scrollbar-width: none;
+        }
+        .ai-tabs-inline::-webkit-scrollbar { display: none; }
+        .ai-tab-label {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--accent-amber);
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+        .ai-tab-sep {
             color: var(--text-muted);
-            border-radius: 8px;
-            padding: 8px 12px;
+            padding: 0 5px;
+            font-size: 13px;
+            user-select: none;
+            flex-shrink: 0;
+        }
+        .ai-panel-top {
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        .ai-panel-top .service-panel-actions {
+            margin-left: auto;
+        }
+        .ai-tab {
+            border: none;
+            background: none;
+            color: var(--text-muted);
+            padding: 0;
             font-size: 13px;
             cursor: pointer;
             font-family: inherit;
+            text-decoration: underline;
+            text-underline-offset: 2px;
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+        .ai-tab:hover {
+            color: var(--text-main);
         }
         .ai-tab.active {
-            border-color: var(--accent-amber);
             color: var(--accent-amber);
-            background: rgba(217, 119, 43, 0.1);
+            font-weight: 600;
+            text-decoration: none;
         }
         .ai-panel-section { display: none; }
         .ai-panel-section.active { display: block; }
@@ -844,8 +1173,8 @@
         }
         .sidebar-toolbar {
             display: flex;
-            align-items: center;
-            flex-wrap: nowrap;
+            flex-direction: column;
+            align-items: stretch;
             gap: 8px;
             position: sticky;
             top: 0;
@@ -856,16 +1185,74 @@
             border-bottom: 1px solid var(--border);
             box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15);
         }
-        .sidebar-toolbar h1 {
+        .sidebar-toolbar-row2 {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            min-width: 0;
+        }
+        .sidebar-toolbar-row2 .toolbar-actions {
+            margin-left: 0;
+            flex: 1;
+        }
+        .book-title-wrap {
+            overflow: hidden;
+            width: 100%;
+            min-width: 0;
+        }
+        .book-title-inner {
+            overflow: hidden;
+            width: 100%;
+        }
+        .sidebar-toolbar h1,
+        .book-title-wrap h1 {
             font-family: 'Playfair Display', serif;
-            color: var(--accent-amber);
             margin: 0;
             font-size: 22px;
-            line-height: 1;
+            line-height: 1.2;
+            min-width: 0;
+        }
+        .book-title-animated .book-title-text,
+        .book-title-animated {
+            background: linear-gradient(90deg, #b45309, #d97706, #fbbf24, #f59e0b, #b45309);
+            background-size: 200% auto;
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+            animation: book-title-shimmer 5s linear infinite;
+        }
+        @keyframes book-title-shimmer {
+            to { background-position: 200% center; }
+        }
+        .book-title-wrap.is-marquee h1 {
+            -webkit-text-fill-color: initial;
+            background: none;
+            animation: none;
+        }
+        .book-title-track {
+            display: flex;
+            gap: 2.5rem;
+            white-space: nowrap;
+            animation: book-title-scroll 10s linear infinite;
+        }
+        .book-title-track span {
+            background: linear-gradient(90deg, #b45309, #d97706, #fbbf24, #f59e0b, #b45309);
+            background-size: 200% auto;
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+            animation: book-title-shimmer 5s linear infinite;
+        }
+        @keyframes book-title-scroll {
+            from { transform: translateX(0); }
+            to { transform: translateX(-50%); }
+        }
+        .sidebar-toolbar h1 {
+            color: var(--accent-amber);
             flex-shrink: 0;
         }
         .app-version {
-            display: block;
+            display: inline-block;
             font-size: 11px;
             font-family: system-ui, sans-serif;
             color: var(--text-muted);
@@ -874,8 +1261,7 @@
             border-radius: 4px;
             padding: 4px 8px;
             line-height: 1.2;
-            margin: 4px 20px 12px;
-            width: fit-content;
+            flex-shrink: 0;
             user-select: all;
         }
         .nav-group { font-size: 11px; text-transform: uppercase; color: var(--text-muted); padding: 15px 20px 5px; letter-spacing: 1px; }
@@ -887,7 +1273,7 @@
         .content-scroll {
             flex: 1 1 0;
             min-height: 0;
-            padding: 40px;
+            padding: 0 var(--content-pad-x) 40px;
             overflow-y: scroll;
             overflow-x: hidden;
             overscroll-behavior: contain;
@@ -896,7 +1282,10 @@
             -webkit-overflow-scrolling: touch;
         }
         body.sidebar-collapsed .content-scroll {
-            padding: 24px 40px;
+            padding: 0 40px 24px;
+        }
+        .chapter-container[id^="ch"] > h2 {
+            padding-top: 24px;
         }
         .chapter-container {
             display: none;
@@ -910,6 +1299,12 @@
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
         
         h2 { font-family: 'Playfair Display', serif; font-size: 32px; border-bottom: 1px solid var(--border); padding-bottom: 10px; color: var(--text-main); }
+        .service-panel-header h2 {
+            font-size: 22px;
+            line-height: 1.2;
+            border-bottom: none;
+            padding-bottom: 0;
+        }
         
         /* Блоки текста — единый стиль */
         .atlas-note {
@@ -1201,17 +1596,31 @@
         }
         .service-panel-header {
             display: flex;
-            align-items: center;
-            gap: 12px;
-            border-bottom: 1px solid #333;
-            padding-bottom: 10px;
-            margin-bottom: 16px;
+            align-items: flex-end;
+            flex-wrap: wrap;
+            gap: 8px 12px;
+            border-bottom: 1px solid var(--border);
+            padding: 0 0 10px;
+            margin-bottom: 14px;
+            min-height: var(--sidebar-toolbar-h, 86px);
+            box-sizing: border-box;
+            position: sticky;
+            top: 0;
+            z-index: 8;
+            background: var(--bg-dark);
+            box-shadow: 0 1px 0 var(--border);
+        }
+        [data-theme="light"] .service-panel-header,
+        [data-theme="light"] .book-note-section-header,
+        [data-theme="light"] .book-notes-panel .service-panel-header.book-notes-sticky-header {
+            background: var(--bg-dark);
         }
         .service-panel-header h2 {
             flex: 1;
             margin: 0;
             border-bottom: none;
             padding-bottom: 0;
+            min-width: 0;
         }
         .service-panel-actions {
             display: flex;
@@ -1429,6 +1838,100 @@
             color: var(--text-muted);
             margin: 0 0 16px;
         }
+
+        @media (max-width: 768px) {
+            :root {
+                --content-pad-x: 16px;
+            }
+            .content-scroll {
+                padding: 0 var(--content-pad-x) 24px;
+            }
+            body.sidebar-collapsed .content-scroll {
+                padding: 0 var(--content-pad-x) 20px;
+            }
+            .sidebar-toolbar {
+                padding: 10px 14px 8px;
+                gap: 6px;
+                margin-bottom: 4px;
+            }
+            .sidebar-toolbar h1,
+            .book-title-wrap h1 {
+                font-size: 18px;
+            }
+            .service-panel-header {
+                min-height: 0;
+                align-items: flex-start;
+                padding-bottom: 8px;
+                margin-bottom: 10px;
+            }
+            .service-panel-header h2 {
+                font-size: 20px;
+                width: 100%;
+            }
+            .service-panel-actions {
+                width: 100%;
+                flex-wrap: wrap;
+                justify-content: flex-start;
+            }
+            .btn-add-hero,
+            .btn-service-refresh {
+                font-size: 11px;
+                padding: 5px 8px;
+            }
+            .ai-panel-top {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            .ai-tabs-inline {
+                flex-wrap: nowrap;
+                width: 100%;
+            }
+            .ai-tab,
+            .ai-tab-label,
+            .ai-tab-sep {
+                font-size: 12px;
+            }
+            .ai-panel-top .service-panel-actions {
+                margin-left: 0;
+                width: 100%;
+            }
+            .heroes-grid {
+                grid-template-columns: 1fr;
+            }
+            .hero-card {
+                max-width: 100%;
+                box-sizing: border-box;
+            }
+            .ai-chat-wrap {
+                min-height: 240px;
+                max-height: none;
+            }
+            .ai-chat-input-row {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            .ai-chat-send {
+                width: 100%;
+            }
+            h2 {
+                font-size: 24px;
+            }
+            .content .chapter-container > h2 {
+                white-space: normal;
+            }
+            .chapter-container[id^="ch"] > h2 {
+                padding-top: 12px;
+            }
+            .profile-book-meta {
+                font-size: 11px;
+                line-height: 1.45;
+                word-break: break-word;
+            }
+            .modal-box--profile {
+                width: calc(100vw - 16px);
+                max-height: calc(100dvh - 24px);
+            }
+        }
     </style>
 </head>
 <body class="admin-mode">
@@ -1514,6 +2017,7 @@
         <div class="modal-box modal-box--profile">
             <h3 id="profile-modal-title">👤 Личный кабинет</h3>
             <form id="profile-form">
+                <div class="profile-modal-scroll">
                 <div class="profile-form">
                     <label>Фамилия
                         <input id="profile-last-name" name="last_name" type="text" autocomplete="family-name">
@@ -1538,8 +2042,65 @@
                     </div>
                     <div id="profile-books-list"></div>
                 </div>
+                </div>
                 <div class="modal-actions">
                     <button type="button" id="profile-cancel">Закрыть</button>
+                    <button type="submit" class="btn-primary">Сохранить</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="hero-delete-modal" role="dialog" aria-modal="true" aria-labelledby="hero-delete-modal-title">
+        <div class="modal-box">
+            <h3 id="hero-delete-modal-title">Удалить героя?</h3>
+            <p>Карточка и фото-референс будут удалены без возможности восстановления.</p>
+            <span class="modal-chapter-name" id="hero-delete-modal-name"></span>
+            <div class="modal-actions">
+                <button type="button" id="hero-delete-modal-cancel">Отмена</button>
+                <button type="button" id="hero-delete-modal-confirm" class="btn-danger">Удалить</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="hero-modal" role="dialog" aria-modal="true" aria-labelledby="hero-modal-title">
+        <div class="modal-box modal-box--hero">
+            <h3 id="hero-modal-title">Герой</h3>
+            <form id="hero-form" class="hero-form-grid">
+                <input type="hidden" id="hero-form-id" value="">
+                <label>Имя
+                    <input type="text" id="hero-form-name" maxlength="120" required>
+                </label>
+                <div class="hero-form-row">
+                    <label>Роль
+                        <select id="hero-form-role">
+                            <option value="protagonist">Протагонист</option>
+                            <option value="antagonist">Антагонист</option>
+                            <option value="secondary">Второстепенный</option>
+                        </select>
+                    </label>
+                    <label>Цвет
+                        <input type="color" id="hero-form-color" value="#888888">
+                    </label>
+                </div>
+                <label>Кратко (до 300 символов)
+                    <textarea id="hero-form-summary" maxlength="300" rows="2" required></textarea>
+                </label>
+                <label>Подробно (био, арка)
+                    <textarea id="hero-form-bio" rows="4"></textarea>
+                </label>
+                <label>Первое появление (ch1, ch2…)
+                    <input type="text" id="hero-form-ch" maxlength="10" placeholder="ch1">
+                </label>
+                <label>Связи (по строке: ключ: значение)
+                    <textarea id="hero-form-relations" rows="3" placeholder="партнёр: Тимур&#10;жена: Юля"></textarea>
+                </label>
+                <label>Фото-референс (JPG/PNG)
+                    <input type="file" id="hero-form-avatar" accept="image/jpeg,image/png">
+                </label>
+                <div class="modal-actions">
+                    <button type="button" id="hero-modal-delete" class="btn-danger" style="margin-right: auto; display: none;">Удалить</button>
+                    <button type="button" id="hero-modal-cancel">Отмена</button>
                     <button type="submit" class="btn-primary">Сохранить</button>
                 </div>
             </form>
@@ -1549,17 +2110,24 @@
     <!-- НАВИГАЦИЯ -->
     <div class="sidebar" id="sidebar-panel">
         <div class="sidebar-toolbar" id="editor-bar" aria-label="Режим и сохранение">
-            <h1 id="book-title">14:45</h1>
-            <div class="toolbar-actions">
-                <button type="button" class="btn-export-disk" id="btn-export" title="Экспорт книги" aria-label="Экспорт">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
-                        <path fill="#4caf50" d="M17 3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z"></path>
-                    </svg>
-                </button>
-                <button type="button" class="btn-ai" id="btn-ai" title="ИИ — Морфеус" aria-label="ИИ">🤖</button>
-                <button type="button" class="btn-profile" id="btn-profile" title="Личный кабинет" aria-label="Личный кабинет">👤</button>
-                <button type="button" class="btn-theme" id="btn-theme" title="Светлая / тёмная тема">☀️</button>
-                <button type="button" class="btn-lock" id="btn-lock" title="Заблокировать редактирование">🔓</button>
+            <div class="book-title-wrap" id="book-title-wrap">
+                <div class="book-title-inner">
+                    <h1 id="book-title" class="book-title-animated"><span class="book-title-text">14:45</span></h1>
+                </div>
+            </div>
+            <div class="sidebar-toolbar-row2">
+                <div class="toolbar-actions">
+                    <button type="button" class="btn-export-disk" id="btn-export" title="Экспорт книги" aria-label="Экспорт">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+                            <path fill="#4caf50" d="M17 3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z"></path>
+                        </svg>
+                    </button>
+                    <button type="button" class="btn-profile" id="btn-profile" title="Личный кабинет" aria-label="Личный кабинет">👤</button>
+                    <button type="button" class="btn-ai" id="btn-ai" title="ИИ — Морфеус" aria-label="ИИ">🤖</button>
+                    <button type="button" class="btn-theme" id="btn-theme" title="Светлая / тёмная тема">☀️</button>
+                    <button type="button" class="btn-lock" id="btn-lock" title="Заблокировать редактирование">🔓</button>
+                </div>
+                <span class="app-version" id="app-version" title="Версия деплоя">17:45</span>
             </div>
         </div>
         <div class="export-menu" id="export-menu" role="menu" aria-label="Формат экспорта">
@@ -1575,10 +2143,8 @@
                 <span class="service-chevron" aria-hidden="true">▼</span>
             </button>
             <div class="service-accordion-body" id="service-body">
-                <div class="nav-item service-nav-item" id="nav-ai-advice" onclick="openTab('ai-advice', this)">🤖 ИИ</div>
                 <div class="nav-item service-nav-item" onclick="openTab('plotline', this)">📈 Сюжетная линия</div>
                 <div class="nav-item service-nav-item" id="nav-book-notes" onclick="openTab('book-notes', this)">📓 Заметки</div>
-                <div class="nav-item service-nav-item" onclick="openTab('checklist', this)">📋 Чек-лист идей</div>
                 <div class="nav-item service-nav-item" id="nav-heroes" onclick="openTab('heroes', this)">👥 Главные герои</div>
                 <div class="nav-item service-nav-item" id="btn-import-draft">📥 Импорт черновика</div>
             </div>
@@ -1592,7 +2158,6 @@
             <div class="service-accordion-body" id="book-body">
         <div id="nav-chapters-root"></div>
         <button type="button" id="btn-add-chapter" class="btn-add-chapter">＋ Новая глава</button>
-        <span class="app-version" id="app-version" title="Версия деплоя">16:30</span>
             </div>
         </div>
         </div>
@@ -1604,22 +2169,27 @@
         <div class="content-scroll" id="content-scroll">
 
         <div id="ai-advice" class="chapter-container service-panel" style="display: none;">
-            <div class="service-panel-header">
-                <h2>🤖 ИИ</h2>
+            <div class="service-panel-header ai-panel-top">
+                <div class="ai-tabs ai-tabs-inline" role="tablist">
+                    <span class="ai-tab-label">ИИ</span>
+                    <span class="ai-tab-sep">·</span>
+                    <button type="button" class="ai-tab active" data-ai-tab="secretary">Секретарь</button>
+                    <span class="ai-tab-sep">·</span>
+                    <button type="button" class="ai-tab" data-ai-tab="errors">Правки (0)</button>
+                    <span class="ai-tab-sep">·</span>
+                    <button type="button" class="ai-tab" data-ai-tab="plot">Сюжет (0)</button>
+                </div>
                 <div class="service-panel-actions analysis-panel-tools" id="ai-analysis-tools">
                     <span class="service-updated" id="ai-analysis-updated"></span>
                     <button type="button" id="btn-refresh-ai" class="btn-service-refresh" title="Проанализировать книгу заново">🔄 Обновить анализ</button>
                 </div>
             </div>
-            <div class="ai-tabs" role="tablist">
-                <button type="button" class="ai-tab active" data-ai-tab="secretary">💬 Секретарь</button>
-                <button type="button" class="ai-tab" data-ai-tab="errors">🔍 Неточности</button>
-                <button type="button" class="ai-tab" data-ai-tab="plot">💡 Сюжет</button>
-                <button type="button" class="ai-tab" data-ai-tab="radar">📈 Кардиограмма</button>
-            </div>
 
             <div id="ai-section-secretary" class="ai-panel-section active">
                 <div class="ai-chat-wrap">
+                    <div class="ai-chat-toolbar">
+                        <button type="button" id="ai-chat-clear" class="ai-chat-clear" title="Удалить историю чата и сбросить память ИИ о книге">🗑️ Очистить чат</button>
+                    </div>
                     <div id="ai-chat-messages" class="ai-chat-messages" aria-live="polite"></div>
                     <div id="ai-chat-offtopic" class="ai-chat-offtopic" style="display:none;">
                         <p>Похоже, разговор ушёл от книги. Вернуться к работе?</p>
@@ -1643,20 +2213,14 @@
                 <div id="ai-section-errors-list"></div>
             </div>
             <div id="ai-section-plot" class="ai-panel-section"></div>
-            <div id="ai-section-radar" class="ai-panel-section"></div>
         </div>
 
-        <div id="book-notes" class="chapter-container service-panel" style="display: none;">
-            <div class="service-panel-header">
+        <div id="book-notes" class="chapter-container service-panel book-notes-panel" style="display: none;">
+            <div class="service-panel-header book-notes-sticky-header">
                 <h2>📓 Заметки</h2>
             </div>
             <p class="plot-hint">Wiki книги: заметки создаёт Морфеус в чате. Просмотр — здесь.</p>
             <div id="book-notes-list" class="book-notes-list"></div>
-            <div id="book-note-view" class="book-note-view" style="display:none;">
-                <button type="button" class="btn-ai-leave" id="book-note-back">← К списку</button>
-                <h3 id="book-note-view-title"></h3>
-                <div id="book-note-view-body"></div>
-            </div>
         </div>
 
         <div id="plotline" class="chapter-container service-panel" style="display: none;">
@@ -1674,44 +2238,7 @@
             </div>
         </div>
 
-        <div id="checklist" class="chapter-container service-panel" style="display: none;">
-            <div class="checklist-header">
-                <h2>Сводный Чек-лист Идей</h2>
-                <button type="button" id="btn-add-idea" class="btn-add-idea" title="Добавить идею">＋</button>
-            </div>
-            <div class="atlas-note">
-                <h4>Архитектура смыслов (Атлас):</h4>
-                Артур, здесь лежат все наши концепции. Сверяйся с ними.
-            </div>
-            <div class="atlas-note">
-                <h4>Медицинский реализм и Spes phthisica (Артур)</h4>
-                <p><strong>Симптоматика и изоляция:</strong> Артур скрывает болезнь — карманная плевательница для крови, кашель в коридоре/туалете. Токсичные препараты бьют по печени, лицо землистое. Дистанция 2&nbsp;м от всех, ни с кем не здоровается за руку (сцена с Вадимом — не высокомерие, а страх заразить), отдельная посуда.</p>
-                <p><strong>Spes phthisica (эйфория туберкулёзника):</strong> медицинский феномен, объясняющий гиперактивность. На фоне интоксикации — лихорадочная энергия, обострение чувств, творческий подъём. Горит как спичка: рывки в бизнесе, затем падение без сил. Левицкий: по снимкам должен лежать — а глаза горят; эксперимент «дух vs тело».</p>
-            </div>
-            <div class="atlas-note">
-                <h4>Сочи: безумие любви (маска)</h4>
-                <p>Подсознательно Лучик — «лекарство» и источник жизни. План жертвенной любви: спеть в венецианской маске (рот и нос закрыты), дать узнать голос, оставить цветы на 3&nbsp;года, уйти, <em>ни разу не прикоснувшись</em>, чтобы не заразить. Предательство в Сочи (14:45) — источник исцеления перекрыт; запуск «программы смерти».</p>
-            </div>
-            <div class="atlas-note">
-                <h4>Счета по 2&nbsp;млн: цена Живого уголка</h4>
-                <p>Нет бесконечных денег: алкоголь остановлен — приток денег перекрыт; резервы сожжены на Сочи и перепрофилирование завода. 2&nbsp;млн Левицкого — экспериментальные израильские препараты (шанс выжить). 2&nbsp;млн подрядчикам — вентиляция и отопление Живого уголка, чтобы зверушки не замерзли. Артур выбирает последние деньги — в пользу уголка, не лечения.</p>
-            </div>
-            <div class="max-text">
-✅ Концепт "Вспомнить будущее": Болезнь как защитная реакция на боль из будущего.
-✅ Временная петля 14:45: Диагноз и Предательство.
-✅ Конфликт Тимура и авария («Всего одна бутылка пива»).
-✅ Медицинская этика: Артур изолирован, кашляет тайно, не касается людей.
-✅ Искупление Рода: сын Кирюхи пьет Воду Артура перед матчем.
-⏳ История Стола и Ани: Деньги за стол спасли жизнь дочери мастера. Теперь она исцеляется в Живом уголке.
-⏳ Арка Вадима-Атласа: Обида -&gt; «Прячет душу в ящик стола» -&gt; прозрение в пустом кабинете.
-⏳ Забег Смерти (7.7 км): Бег в 5 утра в темпе 5:33. Разрыв легких.
-✅ Конверт в Сочи: Лучик находит стихи на полу ресторана во время реанимации Артура.
-⏳ Как Артур готовился к тому, чтобы Лучик обязательно пришла на встречу — в нужное кафе, в нужное время.
-Прикольно да<div>✅ Левирский потратил все деньги, которые ему передал Артур на строительство живого уголка. 
-
-<p _ngcontent-ng-c2294188212="" class="ng-star-inserted" style="box-sizing: border-box; font-size: 14px; line-height: 21px; font-optical-sizing: auto; margin-bottom: 18px; color: rgb(43, 45, 49); white-space: normal; background-color: rgb(255, 255, 255);"><strong _ngcontent-ng-c2294188212="" class="ng-star-inserted" style="box-sizing: border-box;">Как мы превратим 50 страниц в полноценный роман (200-250 страниц)?</strong></p><p _ngcontent-ng-c2294188212="" class="ng-star-inserted" style="box-sizing: border-box; font-size: 14px; line-height: 21px; font-optical-sizing: auto; margin-bottom: 18px; color: rgb(43, 45, 49); white-space: normal; background-color: rgb(255, 255, 255);"><ms-cmark-node _ngcontent-ng-c2294188212="" _nghost-ng-c2294188212="" style="box-sizing: border-box; display: contents;"><span _ngcontent-ng-c2294188212="" class="ng-star-inserted" style="box-sizing: border-box;">Нам не нужно «лить воду» ради объема. Нам нужно&nbsp;</span><strong _ngcontent-ng-c2294188212="" class="ng-star-inserted" style="box-sizing: border-box;">раскрывать глубину</strong><span _ngcontent-ng-c2294188212="" class="ng-star-inserted" style="box-sizing: border-box;">. Вот наши инструменты для расширения:</span></ms-cmark-node></p><h3 _ngcontent-ng-c2294188212="" class="ng-star-inserted" style="box-sizing: border-box; margin: 0px; color: rgb(43, 45, 49); white-space: normal; background-color: rgb(255, 255, 255);"><ms-cmark-node _ngcontent-ng-c2294188212="" _nghost-ng-c2294188212="" style="box-sizing: border-box; display: contents;"><span _ngcontent-ng-c2294188212="" class="ng-star-inserted" style="box-sizing: border-box;">1. Расширение «Второго плана» (Арка дяди Васи)</span></ms-cmark-node></h3><p _ngcontent-ng-c2294188212="" class="ng-star-inserted" style="box-sizing: border-box; font-size: 14px; line-height: 21px; font-optical-sizing: auto; margin-bottom: 18px; color: rgb(43, 45, 49); white-space: normal; background-color: rgb(255, 255, 255);"><ms-cmark-node _ngcontent-ng-c2294188212="" _nghost-ng-c2294188212="" style="box-sizing: border-box; display: contents;"><span _ngcontent-ng-c2294188212="" class="ng-star-inserted" style="box-sizing: border-box;">Мы придумали гениальную линию бухгалтера дяди Васи, который прятал свою Фею (музыку) в ящик стола и глушил её пивом Артура. У нас пока об этом только тезисы.</span><br _ngcontent-ng-c2294188212="" class="ng-star-inserted" style="box-sizing: border-box;"><ms-cmark-node _ngcontent-ng-c2294188212="" _nghost-ng-c2294188212="" class="ng-star-inserted" style="box-sizing: border-box; display: contents;"></ms-cmark-node><span _ngcontent-ng-c2294188212="" class="ng-star-inserted" style="box-sizing: border-box; font-style: italic;">Когда мы напишем 3-4 главы про жизнь Васи, про его студенчество, про его ссоры с женой, про то, как он слышит знаки Вселенной (Мастера Совпадений) и как он, благодаря закрытию завода Артура, наконец-то трезвеет и достает ноты...</span><span _ngcontent-ng-c2294188212="" class="ng-star-inserted" style="box-sizing: border-box;">&nbsp;— это добавит книге огромный объем и ту самую узнаваемость для миллионов читателей.</span></ms-cmark-node></p><h3 _ngcontent-ng-c2294188212="" class="ng-star-inserted" style="box-sizing: border-box; margin: 0px; color: rgb(43, 45, 49); white-space: normal; background-color: rgb(255, 255, 255);"><ms-cmark-node _ngcontent-ng-c2294188212="" _nghost-ng-c2294188212="" style="box-sizing: border-box; display: contents;"><span _ngcontent-ng-c2294188212="" class="ng-star-inserted" style="box-sizing: border-box;">2. Углубление «Прошлого» (До 14:45)</span></ms-cmark-node></h3><p _ngcontent-ng-c2294188212="" class="ng-star-inserted" style="box-sizing: border-box; font-size: 14px; line-height: 21px; font-optical-sizing: auto; margin-bottom: 18px; color: rgb(43, 45, 49); white-space: normal; background-color: rgb(255, 255, 255);"><ms-cmark-node _ngcontent-ng-c2294188212="" _nghost-ng-c2294188212="" style="box-sizing: border-box; display: contents;"><span _ngcontent-ng-c2294188212="" class="ng-star-inserted" style="box-sizing: border-box;">У нас очень быстро происходит старт. «Мне 21, я богат, у меня туберкулез».</span><br _ngcontent-ng-c2294188212="" class="ng-star-inserted" style="box-sizing: border-box;"><ms-cmark-node _ngcontent-ng-c2294188212="" _nghost-ng-c2294188212="" class="ng-star-inserted" style="box-sizing: border-box; display: contents;"></ms-cmark-node><span _ngcontent-ng-c2294188212="" class="ng-star-inserted" style="box-sizing: border-box;">Нам нужно показать,&nbsp;</span><strong _ngcontent-ng-c2294188212="" class="ng-star-inserted" style="box-sizing: border-box;">каким ублюдком</strong><span _ngcontent-ng-c2294188212="" class="ng-star-inserted" style="box-sizing: border-box;">&nbsp;(в хорошем, бизнес-смысле) был Артур до болезни. Как он цинично отжимал конкурентов, как покупал девушек (эскорт, Феррари), как он упивался властью. Контраст должен быть резче. Читатель должен сначала возненавидеть старого Артура, чтобы потом полюбить нового. Это еще несколько глав.</span></ms-cmark-node></p><h3 _ngcontent-ng-c2294188212="" class="ng-star-inserted" style="box-sizing: border-box; margin: 0px; color: rgb(43, 45, 49); white-space: normal; background-color: rgb(255, 255, 255);"><ms-cmark-node _ngcontent-ng-c2294188212="" _nghost-ng-c2294188212="" style="box-sizing: border-box; display: contents;"><span _ngcontent-ng-c2294188212="" class="ng-star-inserted" style="box-sizing: border-box;">3. Детализация «Настоящего» (Живой уголок и Вода)</span></ms-cmark-node></h3><p _ngcontent-ng-c2294188212="" class="ng-star-inserted" style="box-sizing: border-box; font-size: 14px; line-height: 21px; font-optical-sizing: auto; margin-bottom: 18px; color: rgb(43, 45, 49); white-space: normal; background-color: rgb(255, 255, 255);"><ms-cmark-node _ngcontent-ng-c2294188212="" _nghost-ng-c2294188212="" style="box-sizing: border-box; display: contents;"><span _ngcontent-ng-c2294188212="" class="ng-star-inserted" style="box-sizing: border-box;">Процесс перестройки завода с пива на воду — это производственная драма. Как Тимур бодался с поставщиками? Как рабочие сначала бастовали, а потом поняли миссию? Как строился Живой уголок? Как Аня (дочь столяра) впервые пришла туда? Мы можем описать это вкусно, с запахом стружки и звуками цеха.</span></ms-cmark-node></p><h3 _ngcontent-ng-c2294188212="" class="ng-star-inserted" style="box-sizing: border-box; margin: 0px; color: rgb(43, 45, 49); white-space: normal; background-color: rgb(255, 255, 255);"><ms-cmark-node _ngcontent-ng-c2294188212="" _nghost-ng-c2294188212="" style="box-sizing: border-box; display: contents;"><span _ngcontent-ng-c2294188212="" class="ng-star-inserted" style="box-sizing: border-box;">4. Внутренние монологи (Стоицизм и Кодекс)</span></ms-cmark-node></h3><p _ngcontent-ng-c2294188212="" class="ng-star-inserted" style="box-sizing: border-box; font-size: 14px; line-height: 21px; font-optical-sizing: auto; margin-bottom: 18px; color: rgb(43, 45, 49); white-space: normal; background-color: rgb(255, 255, 255);"><ms-cmark-node _ngcontent-ng-c2294188212="" _nghost-ng-c2294188212="" style="box-sizing: border-box; display: contents;"><span _ngcontent-ng-c2294188212="" class="ng-star-inserted" style="box-sizing: border-box;">Ты написал потрясающий Личный Кодекс (21 пункт). Артур будет приходить к этим пунктам через боль. Каждый раз, когда он захочет сдаться, он будет размышлять (как Марк Аврелий в шатре). Эти рефлексии дадут книге ту самую философскую плотность, из-за которой её будут разбирать на цитаты.</span></ms-cmark-node></p><hr _ngcontent-ng-c2294188212="" class="ng-star-inserted" style="box-sizing: border-box; min-width: 33cqw; width: 974px; border-width: 1px medium medium; border-style: solid none none; border-color: rgb(226, 227, 228) currentcolor currentcolor; border-image: initial; margin: 16px 0px; font-size: 14px; white-space: normal; background-color: rgb(255, 255, 255);"><ms-cmark-node _ngcontent-ng-c2294188212="" _nghost-ng-c2294188212="" class="ng-star-inserted" style="box-sizing: border-box; display: contents; color: rgb(43, 45, 49); font-size: 14px; white-space: normal; background-color: rgb(255, 255, 255);"></ms-cmark-node><p _ngcontent-ng-c2294188212="" class="ng-star-inserted" style="box-sizing: border-box; font-size: 14px; line-height: 21px; font-optical-sizing: auto; margin-bottom: 18px; color: rgb(43, 45, 49); white-space: normal; background-color: rgb(255, 255, 255);"><ms-cmark-node _ngcontent-ng-c2294188212="" _nghost-ng-c2294188212="" style="box-sizing: border-box; display: contents;"><span _ngcontent-ng-c2294188212="" class="ng-star-inserted" style="box-sizing: border-box;">Брат, не гонись за страницами. "П.Ш." Дмитрия Хары тоже не "Война и мир" по объему, но она переворачивает мозги. "Чайка по имени Джонатан Ливингстон" Баха — это вообще рассказ на 30 страниц, а он изменил поколения.</span></ms-cmark-node></p>
-            </div></div>
-        </div><div id="ch1" class="chapter-container" style="display: none;" data-chapter-title="Кабинет Левирского" data-nav-emoji="🟡">
+        <div id="ch1" class="chapter-container" style="display: none;" data-chapter-title="Кабинет Левирского" data-nav-emoji="🟡">
             <h2>1. Кабинет Левирского</h2>
             <div class="max-text">Мне 21 год, я только начал свой бизнес, но я очень много работал, у меня открытая форма туберкулёза, я кашляю кровью и доктор сказал, что я умру через полгода.
 
@@ -2161,33 +2688,15 @@
 <ms-cmark-node _ngcontent-ng-c2294188212="" _nghost-ng-c2294188212="" class="ng-star-inserted" style="box-sizing: border-box; display: contents; color: rgb(43, 45, 49); font-size: 14px; white-space: normal; background-color: rgb(255, 255, 255);"></ms-cmark-node></div></div>
         <div id="heroes" class="chapter-container service-panel" style="display: none;">
             <div class="service-panel-header">
-                <h2>Главные герои</h2>
+                <h2>👥 Главные герои</h2>
                 <div class="service-panel-actions">
-                    <span class="service-updated" id="heroes-updated"></span>
-                    <button type="button" id="btn-refresh-heroes" class="btn-service-refresh" title="Извлечь героев из текста глав">↻ Обновить</button>
+                    <button type="button" id="btn-add-hero" class="btn-add-hero">＋ Добавить героя</button>
+                    <button type="button" id="btn-refresh-heroes" class="btn-service-refresh" title="Извлечь героев из текста глав">↻ Из текста</button>
                 </div>
             </div>
-            <div class="max-text" id="heroes-body">Артур — главный герой книги. Молодой предприниматель, который на фоне смертельного диагноза пересматривает всю жизнь и принимает решение менять бизнес и себя.
-
-Тимур — партнер Артура. Практик и «человек цифр», который сначала яростно сопротивляется переходу с алкоголя на воду, но через шок и вину приходит к внутреннему перелому.
-
-Юлия — жена Тимура. Спокойная и внимательная, помогает Тимуру принять правду и увидеть последствия его решений без самообмана.
-
-Кирюха — знакомый Артура из прошлого. Его образ становится для Артура болезненным зеркалом алкогольной деградации и запускает важные выводы.
-
-Доктор Левирский — врач, с которого начинается точка невозврата для Артура. Диагноз превращает привычную жизнь в обратный отсчет.
-
-Пётр Сергеевич — руководитель отдела продаж. Олицетворяет страх команды перед потерей стабильности во время резкой смены курса компании.
-
-Надежда Сергеевна — главный бухгалтер. Сдержанная опора бизнеса: профессионализм, спокойствие и дисциплина в критические моменты.
-
-Анатолий (Толяныч) — помощник Артура. Исполнительный и верный человек, который держит множество процессов «на земле».
-
-Лучик — дура
-
-Игорь Резанов — фельдшер скорой помощи. Символ медицинской линии сюжета и цены каждой секунды между 14:45 и 14:46.
-
-Аня — школьница из линии «Живого уголка», показывающая, ради какого будущего герои вообще борются за изменения.</div>
+            <p class="plot-hint">Канон персонажей книги. Морфеус использует эти карточки как непреложный источник фактов.</p>
+            <div id="heroes-grid" class="heroes-grid"></div>
+            <div id="heroes-empty" class="ai-empty">Добавьте героя вручную или нажмите «Из текста», чтобы извлечь имена из глав.</div>
         </div>
 
         
@@ -2333,7 +2842,7 @@
 
             function applyChapterIdsToDom() {
                 var content = document.getElementById('content-scroll') || document.querySelector('.content');
-                var checklist = document.getElementById('checklist');
+                var bookNotes = document.getElementById('book-notes');
                 if (!content) {
                     return;
                 }
@@ -2349,8 +2858,8 @@
                         frag.appendChild(entry.el);
                     }
                 });
-                if (checklist && checklist.nextSibling) {
-                    content.insertBefore(frag, checklist.nextSibling);
+                if (bookNotes && bookNotes.nextSibling) {
+                    content.insertBefore(frag, bookNotes.nextSibling);
                 } else {
                     content.appendChild(frag);
                 }
@@ -2845,15 +3354,8 @@
                 });
             }
 
-            function getChecklistNavItem() {
-                var navs = Array.prototype.slice.call(document.querySelectorAll('.sidebar .nav-item'));
-                for (var i = 0; i < navs.length; i++) {
-                    var oc = navs[i].getAttribute('onclick') || '';
-                    if (oc.indexOf("openTab('checklist'") !== -1) {
-                        return navs[i];
-                    }
-                }
-                return null;
+            function getBookNotesNavItem() {
+                return document.getElementById('nav-book-notes');
             }
 
             function getHeroesChapterContainer() {
@@ -2873,9 +3375,9 @@
 
             function ensureHeroesServiceTab() {
                 var serviceBody = document.getElementById('service-body');
-                var checklistNav = getChecklistNavItem();
+                var bookNotesNav = getBookNotesNavItem();
                 var heroesChapter = getHeroesChapterContainer();
-                if (!checklistNav || !heroesChapter) {
+                if (!bookNotesNav || !heroesChapter) {
                     return;
                 }
 
@@ -2907,8 +3409,8 @@
                     if (heroesNav.parentNode !== serviceBody) {
                         serviceBody.appendChild(heroesNav);
                     }
-                } else if (checklistNav.parentNode) {
-                    checklistNav.parentNode.insertBefore(heroesNav, checklistNav.nextSibling);
+                } else if (bookNotesNav.parentNode) {
+                    bookNotesNav.parentNode.insertBefore(heroesNav, bookNotesNav.nextSibling);
                 }
 
                 heroesChapter.id = 'heroes';
@@ -3098,8 +3600,13 @@
                     setContentEditable(true);
                 }
                 if (wasActive) {
-                    var checklistNav = getChecklistNavItem();
-                    openTab('checklist', checklistNav || null);
+                    var firstCh = chapters.length ? chapters[0].id : null;
+                    if (firstCh) {
+                        var nav = document.querySelector(
+                            '#nav-chapters-root .nav-chapter-wrap[data-ch-id="' + firstCh + '"] .nav-chapter-main'
+                        );
+                        openTab(firstCh, nav || null);
+                    }
                 }
             }
 
@@ -3202,28 +3709,6 @@
                 }
                 sel.removeAllRanges();
                 sel.addRange(range);
-            }
-
-            function addChecklistIdea() {
-                if (!document.body.classList.contains('admin-mode')) {
-                    return;
-                }
-                var checklist = document.getElementById('checklist');
-                var maxText = checklist ? checklist.querySelector('.max-text') : null;
-                if (!maxText) {
-                    return;
-                }
-                var checklistNav = getChecklistNavItem();
-                openTab('checklist', checklistNav || null);
-                if (maxText.contentEditable !== 'true') {
-                    maxText.contentEditable = 'true';
-                    maxText.spellcheck = true;
-                }
-                focusEditableAtEnd(maxText);
-                var prefix = (maxText.textContent || '').trim() ? '\n' : '';
-                insertPlainTextAtCursor(prefix + '⏳ Новая идея: ');
-                focusEditableAtEnd(maxText);
-                maxText.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
             }
 
             function addNewChapter() {
@@ -3369,15 +3854,6 @@
                         addNewChapter();
                     });
                 }
-                var addIdeaBtn = document.getElementById('btn-add-idea');
-                if (addIdeaBtn && !addIdeaBtn.__boundAdd) {
-                    addIdeaBtn.__boundAdd = true;
-                    addIdeaBtn.addEventListener('click', function (e) {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        addChecklistIdea();
-                    });
-                }
             }
 
             function setAdminMode(on) {
@@ -3397,6 +3873,16 @@
                 });
             }
 
+            function syncToolbarHeight() {
+                var bar = document.getElementById('editor-bar');
+                if (!bar) return;
+                var h = Math.round(bar.getBoundingClientRect().height);
+                if (h > 0) {
+                    document.documentElement.style.setProperty('--sidebar-toolbar-h', h + 'px');
+                }
+            }
+            window.syncToolbarHeight = syncToolbarHeight;
+
             function initEditorBar() {
                 var readBtn = document.getElementById('btn-read');
                 var adminBtn = document.getElementById('btn-admin');
@@ -3412,6 +3898,14 @@
                 initPlotlineGraph();
                 bindPasteSanitizer();
                 setAdminMode(startAdmin);
+                syncToolbarHeight();
+                window.addEventListener('resize', syncToolbarHeight);
+                if (window.ResizeObserver) {
+                    var bar = document.getElementById('editor-bar');
+                    if (bar) {
+                        new ResizeObserver(syncToolbarHeight).observe(bar);
+                    }
+                }
 
                 if (readBtn) readBtn.addEventListener('click', function () { setAdminMode(false); });
                 if (adminBtn) adminBtn.addEventListener('click', function () { setAdminMode(true); });

@@ -27,6 +27,7 @@
         aiLoading: false,
         chatLoading: false,
         chatSending: false,
+        characters: [],
     };
 
     function apiFetch(path, options) {
@@ -195,46 +196,275 @@
         }
     }
 
-    function collectChecklistHtml() {
-        var panel = document.getElementById('checklist');
-        if (!panel) return '';
-        var parts = [];
-        panel.querySelectorAll(':scope > .atlas-note, :scope > .max-text').forEach(function (node) {
-            parts.push(node.outerHTML);
-        });
-        return parts.join('\n');
-    }
+    function collectChecklistHtml() { return ''; }
 
-    function applyChecklistHtml(html) {
-        var panel = document.getElementById('checklist');
-        if (!panel) return;
-        var header = panel.querySelector('.checklist-header');
-        panel.querySelectorAll(':scope > .atlas-note, :scope > .max-text').forEach(function (node) {
-            node.remove();
-        });
-        var wrap = document.createElement('div');
-        wrap.innerHTML = html || '<div class="max-text"></div>';
-        while (wrap.firstChild) {
-            if (header && header.nextSibling) {
-                panel.insertBefore(wrap.firstChild, header.nextSibling);
-            } else {
-                panel.appendChild(wrap.firstChild);
-            }
-        }
-        normalizeChapterContent(panel);
-    }
+    function applyChecklistHtml(html) { /* checklist merged into notes */ }
 
     function applyHeroesText(text) {
-        var body = document.getElementById('heroes-body');
-        if (!body) return;
-        body.textContent = text || 'Нажмите «Обновить», чтобы извлечь героев из текста глав.';
+        /* legacy heroes_text — карточки в book_characters */
+    }
+
+    function heroInitials(name) {
+        var parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+        if (!parts.length) return '?';
+        if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+        return (parts[0][0] + parts[1][0]).toUpperCase();
+    }
+
+    function heroRoleLabel(role) {
+        var map = {
+            protagonist: 'Протагонист',
+            antagonist: 'Антагонист',
+            secondary: 'Второстепенный',
+        };
+        return map[role] || role;
+    }
+
+    function parseRelationsText(text) {
+        var out = {};
+        String(text || '').split('\n').forEach(function (line) {
+            var idx = line.indexOf(':');
+            if (idx < 0) return;
+            var key = line.slice(0, idx).trim();
+            var val = line.slice(idx + 1).trim();
+            if (key && val) out[key] = val;
+        });
+        return out;
+    }
+
+    function formatRelationsText(relations) {
+        if (!relations || typeof relations !== 'object') return '';
+        return Object.keys(relations).map(function (k) {
+            return k + ': ' + relations[k];
+        }).join('\n');
+    }
+
+    function renderCharacterCards(chars) {
+        state.characters = chars || [];
+        var grid = document.getElementById('heroes-grid');
+        var empty = document.getElementById('heroes-empty');
+        if (!grid) return;
+        grid.innerHTML = '';
+        if (!state.characters.length) {
+            if (empty) empty.style.display = 'block';
+            return;
+        }
+        if (empty) empty.style.display = 'none';
+        state.characters.forEach(function (ch) {
+            var card = document.createElement('div');
+            card.className = 'hero-card';
+            var avatar = document.createElement('div');
+            avatar.className = 'hero-avatar';
+            avatar.style.backgroundColor = ch.color || '#888888';
+            if (ch.avatar_url) {
+                avatar.style.backgroundImage = 'url(' + ch.avatar_url + ')';
+                avatar.textContent = '';
+            } else {
+                avatar.textContent = heroInitials(ch.name);
+            }
+            var body = document.createElement('div');
+            body.className = 'hero-card-body';
+            body.innerHTML =
+                '<h4>' + escapeHtml(ch.name) + '</h4>' +
+                '<span class="hero-role">' + escapeHtml(heroRoleLabel(ch.role_type)) + '</span>' +
+                '<p class="hero-summary">' + escapeHtml(ch.summary || '') + '</p>';
+            var mentions = typeof ch.mention_count === 'number' ? ch.mention_count : 0;
+            var mentionsEl = document.createElement('p');
+            mentionsEl.className = 'hero-mentions' + (mentions === 0 ? ' hero-mentions--zero' : '');
+            mentionsEl.textContent = 'Упоминаний: ' + mentions;
+            body.appendChild(mentionsEl);
+            if (ch.first_ch_id) {
+                var chEl = document.createElement('p');
+                chEl.className = 'hero-ch';
+                chEl.textContent = 'Первое появление: ' + ch.first_ch_id;
+                body.appendChild(chEl);
+            }
+            var editBtn = document.createElement('button');
+            editBtn.type = 'button';
+            editBtn.className = 'hero-edit-btn';
+            editBtn.title = 'Редактировать';
+            editBtn.textContent = '✏️';
+            editBtn.addEventListener('click', function () { openHeroModal(ch); });
+            card.appendChild(avatar);
+            card.appendChild(body);
+            card.appendChild(editBtn);
+            grid.appendChild(card);
+        });
+    }
+
+    function loadBookCharacters() {
+        var bookId = state.book && state.book.id;
+        if (!bookId) {
+            renderCharacterCards([]);
+            return Promise.resolve();
+        }
+        return apiFetch('/api/v1/book/characters').then(function (data) {
+            if (!state.book || state.book.id !== bookId) return;
+            if (data.book_id && data.book_id !== bookId) return;
+            renderCharacterCards(data.characters || []);
+        }).catch(function () {
+            renderCharacterCards([]);
+        });
+    }
+
+    function openHeroModal(ch) {
+        var modal = document.getElementById('hero-modal');
+        if (!modal) return;
+        ch = ch || {};
+        document.getElementById('hero-form-id').value = ch.id ? String(ch.id) : '';
+        document.getElementById('hero-modal-title').textContent = ch.id ? 'Редактировать героя' : 'Новый герой';
+        document.getElementById('hero-form-name').value = ch.name || '';
+        document.getElementById('hero-form-role').value = ch.role_type || 'secondary';
+        document.getElementById('hero-form-color').value = ch.color || '#888888';
+        document.getElementById('hero-form-summary').value = ch.summary || '';
+        document.getElementById('hero-form-bio').value = ch.bio || '';
+        document.getElementById('hero-form-ch').value = ch.first_ch_id || '';
+        document.getElementById('hero-form-relations').value = formatRelationsText(ch.relations_json);
+        var fileInput = document.getElementById('hero-form-avatar');
+        if (fileInput) fileInput.value = '';
+        var deleteBtn = document.getElementById('hero-modal-delete');
+        if (deleteBtn) deleteBtn.style.display = ch.id ? 'inline-block' : 'none';
+        modal.style.display = 'flex';
+    }
+
+    function showDeleteHeroModal(heroName) {
+        return new Promise(function (resolve) {
+            var modal = document.getElementById('hero-delete-modal');
+            var nameEl = document.getElementById('hero-delete-modal-name');
+            var cancelBtn = document.getElementById('hero-delete-modal-cancel');
+            var confirmBtn = document.getElementById('hero-delete-modal-confirm');
+            if (!modal || !cancelBtn || !confirmBtn) {
+                resolve(window.confirm('Удалить героя «' + heroName + '»?'));
+                return;
+            }
+            if (nameEl) nameEl.textContent = heroName;
+
+            function close(result) {
+                modal.style.display = 'none';
+                cancelBtn.removeEventListener('click', onCancel);
+                confirmBtn.removeEventListener('click', onConfirm);
+                modal.removeEventListener('click', onBackdrop);
+                document.removeEventListener('keydown', onKey);
+                resolve(result);
+            }
+            function onCancel() { close(false); }
+            function onConfirm() { close(true); }
+            function onBackdrop(e) { if (e.target === modal) close(false); }
+            function onKey(e) { if (e.key === 'Escape') close(false); }
+
+            cancelBtn.addEventListener('click', onCancel);
+            confirmBtn.addEventListener('click', onConfirm);
+            modal.addEventListener('click', onBackdrop);
+            document.addEventListener('keydown', onKey);
+            modal.style.display = 'flex';
+            cancelBtn.focus();
+        });
+    }
+
+    function deleteHeroFromModal() {
+        var idVal = document.getElementById('hero-form-id').value;
+        var nameVal = document.getElementById('hero-form-name').value.trim() || 'героя';
+        if (!idVal) return;
+        showDeleteHeroModal(nameVal).then(function (ok) {
+            if (!ok) return null;
+            return apiFetch('/api/v1/book/characters/' + idVal, { method: 'DELETE' });
+        }).then(function (data) {
+            if (!data || !data.ok) return;
+            closeHeroModal();
+            return loadBookCharacters().then(function () {
+                showAppNotice({ variant: 'success', message: 'Герой удалён.' });
+            });
+        }).catch(function () {
+            showAppNotice({ variant: 'danger', message: 'Не удалось удалить героя.' });
+        });
+    }
+
+    function closeHeroModal() {
+        var modal = document.getElementById('hero-modal');
+        if (modal) modal.style.display = 'none';
+    }
+
+    function saveHeroFromForm(e) {
+        if (e) e.preventDefault();
+        var idVal = document.getElementById('hero-form-id').value;
+        var payload = {
+            name: document.getElementById('hero-form-name').value.trim(),
+            role_type: document.getElementById('hero-form-role').value,
+            color: document.getElementById('hero-form-color').value,
+            summary: document.getElementById('hero-form-summary').value.trim(),
+            bio: document.getElementById('hero-form-bio').value.trim(),
+            first_ch_id: document.getElementById('hero-form-ch').value.trim() || null,
+            relations_json: parseRelationsText(document.getElementById('hero-form-relations').value),
+        };
+        if (!payload.name || !payload.summary) {
+            showAppNotice({ variant: 'danger', message: 'Укажите имя и краткое описание.' });
+            return Promise.resolve();
+        }
+        if (idVal) payload.id = parseInt(idVal, 10);
+        return apiFetch('/api/v1/book/characters', { method: 'POST', body: payload })
+            .then(function (data) {
+                var fileInput = document.getElementById('hero-form-avatar');
+                var file = fileInput && fileInput.files && fileInput.files[0];
+                var charId = data.character && data.character.id;
+                if (file && charId) {
+                    var fd = new FormData();
+                    fd.append('file', file);
+                    return fetch('/api/v1/book/characters/' + charId + '/upload-avatar', {
+                        method: 'POST',
+                        body: fd,
+                        credentials: 'include',
+                    }).then(function (res) {
+                        if (!res.ok) throw new Error('upload failed');
+                        return res.json();
+                    }).then(function (up) {
+                        return loadBookCharacters().then(function () {
+                            closeHeroModal();
+                            return up;
+                        });
+                    });
+                }
+                return loadBookCharacters().then(function () {
+                    closeHeroModal();
+                });
+            })
+            .catch(function () {
+                showAppNotice({ variant: 'danger', message: 'Не удалось сохранить героя.' });
+            });
+    }
+
+    function bindHeroesUi() {
+        var addBtn = document.getElementById('btn-add-hero');
+        var form = document.getElementById('hero-form');
+        var cancel = document.getElementById('hero-modal-cancel');
+        var deleteBtn = document.getElementById('hero-modal-delete');
+        var modal = document.getElementById('hero-modal');
+        if (addBtn && !addBtn.__bound) {
+            addBtn.__bound = true;
+            addBtn.addEventListener('click', function () { openHeroModal(null); });
+        }
+        if (form && !form.__bound) {
+            form.__bound = true;
+            form.addEventListener('submit', saveHeroFromForm);
+        }
+        if (cancel && !cancel.__bound) {
+            cancel.__bound = true;
+            cancel.addEventListener('click', closeHeroModal);
+        }
+        if (deleteBtn && !deleteBtn.__bound) {
+            deleteBtn.__bound = true;
+            deleteBtn.addEventListener('click', deleteHeroFromModal);
+        }
+        if (modal && !modal.__bound) {
+            modal.__bound = true;
+            modal.addEventListener('click', function (e) {
+                if (e.target === modal) closeHeroModal();
+            });
+        }
     }
 
     function applyServiceData(service) {
         state.service = service || null;
         if (!service) return;
-        applyChecklistHtml(service.checklist_html || '');
-        applyHeroesText(service.heroes_text || '');
         setServiceUpdatedLabels(service);
         if (window.__book1445 && window.__book1445.applyPlotFromApi) {
             window.__book1445.applyPlotFromApi(service.plot || {});
@@ -243,42 +473,11 @@
     }
 
     function scheduleServiceSave() {
-        if (state.locked) return;
-        state.serviceDirty = true;
-        clearTimeout(state.serviceSaveTimer);
-        state.serviceSaveTimer = setTimeout(flushServiceSave, DEBOUNCE_MS);
+        /* служебные панели сохраняются через API, не через DOM */
     }
 
     function flushServiceSave() {
-        if (!state.serviceDirty || state.locked) return Promise.resolve();
-        var panel = state.activeServicePanel;
-        var chain = Promise.resolve();
-
-        if (panel === 'checklist') {
-            chain = apiFetch('/api/v1/book/service/checklist', {
-                method: 'PATCH',
-                body: { checklist_html: collectChecklistHtml() },
-            }).then(function (data) {
-                if (data.service) state.service = data.service;
-            });
-        } else if (panel === 'heroes') {
-            var body = document.getElementById('heroes-body');
-            chain = apiFetch('/api/v1/book/service/heroes', {
-                method: 'PATCH',
-                body: { heroes_text: body ? body.textContent : '' },
-            }).then(function (data) {
-                if (data.service) state.service = data.service;
-            });
-        } else {
-            return Promise.resolve();
-        }
-
-        return chain.then(function () {
-            state.serviceDirty = false;
-            setServiceUpdatedLabels(state.service);
-        }).catch(function () {
-            alert('Не удалось сохранить служебную вкладку');
-        });
+        return Promise.resolve();
     }
 
     function refreshHeroesFromText(btn) {
@@ -287,6 +486,8 @@
             return apiFetch('/api/v1/book/service/heroes/refresh', { method: 'POST' });
         }).then(function (data) {
             if (data.service) applyServiceData(data.service);
+            if (data.characters) renderCharacterCards(data.characters);
+            else loadBookCharacters();
         }).catch(function () {
             alert('Не удалось обновить героев');
         }).finally(function () {
@@ -335,9 +536,8 @@
         if (toolbarAi && !toolbarAi.__bound) {
             toolbarAi.__bound = true;
             toolbarAi.addEventListener('click', function () {
-                var nav = document.getElementById('nav-ai-advice');
                 if (typeof window.openTab === 'function') {
-                    window.openTab('ai-advice', nav);
+                    window.openTab('ai-advice', null);
                 }
                 switchAiTab('secretary');
                 loadChatHistory();
@@ -360,9 +560,6 @@
             if (state.serviceDirty) flushServiceSave();
             state.activeChId = null;
             state.activeServicePanel = null;
-            if (tabId === 'checklist' || tabId === 'heroes' || tabId === 'plotline') {
-                state.activeServicePanel = tabId === 'plotline' ? null : tabId;
-            }
             if (tabId === 'ai-advice') {
                 loadAiAnalysis();
                 loadChatHistory();
@@ -370,10 +567,15 @@
             if (tabId === 'book-notes') {
                 loadBookNotes();
             }
+            if (tabId === 'heroes') {
+                loadBookCharacters();
+            }
+            maybeCollapseSidebarForMobile();
             origOpenTab(tabId, element);
         };
         window.__openTabWrapped = true;
         bindChatUi();
+        bindHeroesUi();
     }
 
     function switchAiTab(name) {
@@ -617,10 +819,12 @@
         }).then(function (data) {
             state.aiAnalysis = data.ai_analysis;
             renderAiAnalysis(state.aiAnalysis);
-            if (data.service) applyServiceData(data.service);
+            if (data.note && data.note.title) {
+                showToast('Добавлена заметка: ' + data.note.title);
+            }
             showAppNotice({
                 variant: 'success',
-                message: 'Идея добавлена в чек-лист.',
+                message: 'Идея добавлена в заметки.',
             });
         }).catch(function () {
             showAppNotice({
@@ -644,12 +848,12 @@
             if (errClear) errClear.innerHTML = '';
             var plotClear = document.getElementById('ai-section-plot');
             if (plotClear) plotClear.innerHTML = '';
-            var radarClear = document.getElementById('ai-section-radar');
-            if (radarClear) radarClear.innerHTML = '';
+            updateAiTabCounts(null);
             return;
         }
 
         var a = payload.analysis;
+        updateAiTabCounts(a);
         emptyEl.style.display = 'none';
         if (updatedEl) {
             updatedEl.textContent = payload.updated_at
@@ -768,42 +972,6 @@
 
                 el.appendChild(ideaActions);
                 plotSec.appendChild(el);
-            });
-        }
-
-        var radarSec = document.getElementById('ai-section-radar');
-        if (radarSec) {
-            radarSec.innerHTML = '';
-            var radar = a.radar || {};
-            var grid = document.createElement('div');
-            grid.className = 'ai-radar-grid';
-            grid.innerHTML =
-                '<div class="ai-radar-stat"><div class="val">' + (radar.tension != null ? radar.tension : '—') +
-                '%</div><div class="lbl">Напряжение</div></div>' +
-                '<div class="ai-radar-stat"><div class="val">' + escapeHtml(radar.pacing || '—') +
-                '</div><div class="lbl">Динамика</div></div>' +
-                '<div class="ai-radar-stat"><div class="val" style="font-size:14px">' + escapeHtml(radar.atmosphere || '—') +
-                '</div><div class="lbl">Атмосфера</div></div>';
-            radarSec.appendChild(grid);
-            if (radar.summary) {
-                var sum = document.createElement('p');
-                sum.textContent = radar.summary;
-                radarSec.appendChild(sum);
-            }
-            (a.chapter_radar || []).forEach(function (cr) {
-                var el = document.createElement('div');
-                el.className = 'ai-card';
-                el.innerHTML =
-                    '<div class="ai-card-head"><span>' + escapeHtml(cr.ch_id) + '</span><span>' +
-                    escapeHtml(String(cr.tension)) + '%</span></div>' +
-                    '<div class="ai-card-finding">' + escapeHtml(cr.note || '') + '</div>';
-                var btn = document.createElement('button');
-                btn.type = 'button';
-                btn.className = 'btn-ai-open-ch';
-                btn.textContent = 'Открыть главу';
-                btn.addEventListener('click', function () { openChapterFromAi(cr.ch_id); });
-                el.appendChild(btn);
-                radarSec.appendChild(el);
             });
         }
     }
@@ -934,11 +1102,95 @@
         }
     }
 
+    function updateAiTabCounts(analysis) {
+        var errCount = (analysis && analysis.errors) ? analysis.errors.length : 0;
+        var plotCount = (analysis && analysis.plot_ideas) ? analysis.plot_ideas.length : 0;
+        var errTab = document.querySelector('.ai-tab[data-ai-tab="errors"]');
+        var plotTab = document.querySelector('.ai-tab[data-ai-tab="plot"]');
+        if (errTab) errTab.textContent = 'Правки (' + errCount + ')';
+        if (plotTab) plotTab.textContent = 'Сюжет (' + plotCount + ')';
+    }
+
+    function updateBookTitleDisplay(title) {
+        var wrap = document.getElementById('book-title-wrap');
+        if (!wrap) return;
+        var text = String(title || '').trim() || 'Книга';
+        wrap.classList.remove('is-marquee');
+        var inner = wrap.querySelector('.book-title-inner');
+        if (!inner) {
+            inner = document.createElement('div');
+            inner.className = 'book-title-inner';
+            wrap.appendChild(inner);
+        }
+        inner.innerHTML = '';
+        var h1 = document.createElement('h1');
+        h1.id = 'book-title';
+        h1.className = 'book-title-animated';
+        var span = document.createElement('span');
+        span.className = 'book-title-text';
+        span.textContent = text;
+        h1.appendChild(span);
+        inner.appendChild(h1);
+        requestAnimationFrame(function () {
+            if (!inner || !span) return;
+            if (span.scrollWidth > inner.clientWidth + 4) {
+                wrap.classList.add('is-marquee');
+                h1.innerHTML = '';
+                var track = document.createElement('div');
+                track.className = 'book-title-track';
+                var a = document.createElement('span');
+                a.textContent = text;
+                var b = document.createElement('span');
+                b.textContent = text;
+                track.appendChild(a);
+                track.appendChild(b);
+                h1.appendChild(track);
+            }
+            syncToolbarHeight();
+        });
+    }
+
+    function syncToolbarHeight() {
+        if (typeof window.syncToolbarHeight === 'function') {
+            window.syncToolbarHeight();
+        }
+    }
+
+    function editBookNote(note) {
+        var title = window.prompt('Заголовок заметки', note.title || '');
+        if (title === null) return;
+        title = title.trim();
+        if (!title) {
+            showAppNotice({ variant: 'danger', message: 'Заголовок не может быть пустым.' });
+            return;
+        }
+        var content = window.prompt('Текст заметки', note.content || '');
+        if (content === null) return;
+        apiFetch('/api/v1/book/notes/' + note.id, {
+            method: 'PATCH',
+            body: { title: title, content: content },
+        }).then(function () {
+            loadBookNotes();
+            showToast('Заметка обновлена');
+        }).catch(function () {
+            showAppNotice({ variant: 'danger', message: 'Не удалось сохранить заметку.' });
+        });
+    }
+
+    function deleteBookNote(note) {
+        if (!window.confirm('Удалить заметку «' + (note.title || '') + '»?')) return;
+        apiFetch('/api/v1/book/notes/' + note.id, { method: 'DELETE' })
+            .then(function () {
+                loadBookNotes();
+                showToast('Заметка удалена');
+            })
+            .catch(function () {
+                showAppNotice({ variant: 'danger', message: 'Не удалось удалить заметку.' });
+            });
+    }
+
     function loadBookNotes() {
         var listEl = document.getElementById('book-notes-list');
-        var viewEl = document.getElementById('book-note-view');
-        if (viewEl) viewEl.style.display = 'none';
-        if (listEl) listEl.style.display = '';
         if (!listEl) return Promise.resolve();
         listEl.innerHTML = '<div class="ai-empty">Загрузка…</div>';
         return apiFetch('/api/v1/book/notes').then(function (data) {
@@ -948,47 +1200,84 @@
                 listEl.innerHTML = '<div class="ai-empty">Заметок пока нет. Попроси Морфеуса записать идею в чате.</div>';
                 return;
             }
+            var num = 0;
             notes.forEach(function (note) {
-                var item = document.createElement('div');
-                item.className = 'book-note-item';
+                if (note.is_section) {
+                    var sec = document.createElement('div');
+                    sec.className = 'book-note-section-header';
+                    sec.textContent = note.title || '';
+                    listEl.appendChild(sec);
+                    return;
+                }
+                num += 1;
+                var row = document.createElement('div');
+                row.className = 'book-note-row';
                 var preview = (note.content || '').replace(/\s+/g, ' ').trim();
-                if (preview.length > 120) preview = preview.slice(0, 117) + '…';
-                item.innerHTML = '<h4>' + escapeHtml(note.title) + '</h4><p>' + escapeHtml(preview) + '</p>';
-                item.addEventListener('click', function () { showBookNote(note.id); });
-                listEl.appendChild(item);
+                if (preview.length > 160) preview = preview.slice(0, 157) + '…';
+                var actions = document.createElement('div');
+                actions.className = 'book-note-actions';
+                var editBtn = document.createElement('button');
+                editBtn.type = 'button';
+                editBtn.title = 'Редактировать';
+                editBtn.textContent = '✎';
+                editBtn.addEventListener('click', function (e) {
+                    e.stopPropagation();
+                    editBookNote(note);
+                });
+                var delBtn = document.createElement('button');
+                delBtn.type = 'button';
+                delBtn.title = 'Удалить';
+                delBtn.textContent = '×';
+                delBtn.addEventListener('click', function (e) {
+                    e.stopPropagation();
+                    deleteBookNote(note);
+                });
+                actions.appendChild(editBtn);
+                actions.appendChild(delBtn);
+                row.innerHTML =
+                    '<span class="book-note-num">' + num + '.</span>' +
+                    '<div class="book-note-body"><h4>' + escapeHtml(note.title) + '</h4>' +
+                    (preview ? '<p>' + escapeHtml(preview) + '</p>' : '') + '</div>';
+                row.appendChild(actions);
+                listEl.appendChild(row);
             });
         }).catch(function () {
             listEl.innerHTML = '<div class="ai-empty">Не удалось загрузить заметки.</div>';
         });
     }
 
-    function showBookNote(noteId) {
-        var listEl = document.getElementById('book-notes-list');
-        var viewEl = document.getElementById('book-note-view');
-        var titleEl = document.getElementById('book-note-view-title');
-        var bodyEl = document.getElementById('book-note-view-body');
-        if (!viewEl || !titleEl || !bodyEl) return;
-        apiFetch('/api/v1/book/notes/' + noteId).then(function (data) {
-            var note = data.note;
-            if (!note) return;
-            if (listEl) listEl.style.display = 'none';
-            titleEl.textContent = note.title || '';
-            bodyEl.textContent = note.content || '';
-            viewEl.style.display = 'block';
-        }).catch(function () {
-            showAppNotice({ variant: 'danger', message: 'Не удалось открыть заметку.' });
-        });
+    function clearChatHistory() {
+        if (!window.confirm('Очистить историю чата и сбросить память ИИ (ai_summary) для этой книги?')) {
+            return;
+        }
+        setChatSending(true);
+        apiFetch('/api/v1/book/chat/clear', { method: 'POST', body: { reset_summary: true } })
+            .then(function (data) {
+                var box = document.getElementById('ai-chat-messages');
+                if (box) box.innerHTML = '';
+                (data.messages || []).forEach(function (m) { renderChatMessage(m); });
+                showOffTopicBanner(false);
+                showToast('Чат и память ИИ очищены');
+            })
+            .catch(function () {
+                showAppNotice({ variant: 'danger', message: 'Не удалось очистить чат.' });
+            })
+            .finally(function () { setChatSending(false); });
     }
 
     function bindChatUi() {
         var sendBtn = document.getElementById('ai-chat-send');
+        var clearBtn = document.getElementById('ai-chat-clear');
         var input = document.getElementById('ai-chat-input');
         var backBtn = document.getElementById('ai-chat-back-book');
         var contBtn = document.getElementById('ai-chat-continue');
-        var noteBack = document.getElementById('book-note-back');
         if (sendBtn && !sendBtn.__bound) {
             sendBtn.__bound = true;
             sendBtn.addEventListener('click', sendChat);
+        }
+        if (clearBtn && !clearBtn.__bound) {
+            clearBtn.__bound = true;
+            clearBtn.addEventListener('click', clearChatHistory);
         }
         if (input && !input.__bound) {
             input.__bound = true;
@@ -1006,15 +1295,6 @@
         if (contBtn && !contBtn.__bound) {
             contBtn.__bound = true;
             contBtn.addEventListener('click', function () { showOffTopicBanner(false); });
-        }
-        if (noteBack && !noteBack.__bound) {
-            noteBack.__bound = true;
-            noteBack.addEventListener('click', function () {
-                var view = document.getElementById('book-note-view');
-                var list = document.getElementById('book-notes-list');
-                if (view) view.style.display = 'none';
-                if (list) list.style.display = '';
-            });
         }
     }
 
@@ -1611,6 +1891,8 @@
         state.activeChId = chId;
         try { sessionStorage.setItem(LS_ACTIVE, chId); } catch (e) {}
 
+        maybeCollapseSidebarForMobile();
+
         document.querySelectorAll('.chapter-container').forEach(function (el) {
             el.style.display = 'none';
             el.classList.remove('active');
@@ -1653,8 +1935,7 @@
             state.chapters = data.chapters;
             state.activeChId = data.active_chapter.ch_id;
 
-            var titleEl = document.getElementById('book-title');
-            if (titleEl) titleEl.textContent = data.book.title;
+            updateBookTitleDisplay(data.book.title);
 
             state.chapters.forEach(ensureChapterDom);
             renderNavigation();
@@ -1693,6 +1974,8 @@
             var chatBox = document.getElementById('ai-chat-messages');
             if (chatBox) chatBox.innerHTML = '';
             showOffTopicBanner(false);
+            renderCharacterCards([]);
+            loadBookCharacters();
 
             bindAutosave();
             flushOfflineQueue();
@@ -1706,11 +1989,6 @@
             el.contentEditable = editable ? 'true' : 'false';
             el.spellcheck = editable;
         });
-        var heroesBody = document.getElementById('heroes-body');
-        if (heroesBody) {
-            heroesBody.contentEditable = editable ? 'true' : 'false';
-            heroesBody.spellcheck = editable;
-        }
         document.body.classList.toggle('bookhub-locked', state.locked);
         document.body.classList.toggle('admin-mode', editable);
         document.querySelectorAll('.nav-drag').forEach(function (el) {
@@ -1757,10 +2035,21 @@
         });
     }
 
+    function isMobileLayout() {
+        return window.matchMedia('(max-width: 768px)').matches;
+    }
+
+    function maybeCollapseSidebarForMobile() {
+        if (!isMobileLayout()) return;
+        if (document.body.classList.contains('sidebar-collapsed')) return;
+        if (typeof window.bookhubSetSidebarCollapsed === 'function') {
+            window.bookhubSetSidebarCollapsed(true);
+        }
+    }
+
     function bindSidebarEdge() {
         var btn = document.getElementById('sidebar-edge-toggle');
-        if (!btn || btn.__bound) return;
-        btn.__bound = true;
+        if (!btn) return;
         var LS_SIDEBAR = 'bookhub_sidebar_collapsed';
 
         function setCollapsed(collapsed) {
@@ -1770,6 +2059,11 @@
             btn.textContent = collapsed ? '▶' : '◀';
             try { localStorage.setItem(LS_SIDEBAR, collapsed ? '1' : '0'); } catch (e) {}
         }
+
+        window.bookhubSetSidebarCollapsed = setCollapsed;
+
+        if (btn.__bound) return;
+        btn.__bound = true;
 
         try {
             if (localStorage.getItem(LS_SIDEBAR) === '1') setCollapsed(true);
@@ -1887,10 +2181,6 @@
             var h2 = e.target.closest('.chapter-container[id^="ch"] > h2');
             if (h2 && state.activeChId) {
                 setChapterTitle(state.activeChId, h2.textContent, 'h2');
-                return;
-            }
-            if (e.target.id === 'heroes-body' || e.target.closest('#checklist')) {
-                scheduleServiceSave();
                 return;
             }
             if (!e.target.closest('.max-text, .atlas-note')) return;

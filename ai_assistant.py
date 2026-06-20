@@ -10,6 +10,8 @@ import urllib.error
 import urllib.request
 from typing import Any
 
+from service_analyzer import is_cast_member
+
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 CREATE_NOTE_RE = re.compile(r"\[CREATE_NOTE:\s*(\{.*?\})\s*\]", re.DOTALL)
 OFF_TOPIC_MARKER = "[OFF_TOPIC]"
@@ -24,8 +26,10 @@ MORPHEUS_SYSTEM = """Роль: Ты — Морфеус, ИИ-секретарь,
    - Предлагать варианты развития сюжета (только если автор сам об этом просит).
    - Создавать структурированные заметки (Wiki) по ходу диалога.
 4. На вопрос «Что ты умеешь?» отвечай строго структурированным списком РЕАЛЬНЫХ функций: поиск ошибок, генерация заметок, анализ структуры, ответы на вопросы по тексту книги.
-5. ПРАВИЛО ВНУТРЕННЕГО КОНТЕНТА: Опирайся только на факты, которые реально есть в главах книги и в ai_summary. Не выдумывай персонажей, сюжетные линии и связи, которых нет в тексте. Не фантазируй без прямого запроса автора вроде «придумай сюжет» или «давай пофантазируем».
-6. Не меняй текст глав напрямую — только обсуждение, советы и заметки.
+5. ПРАВИЛО ВНУТРЕННЕГО КОНТЕНТА: Опирайся только на факты из блока КАНОН ПЕРСОНАЖЕЙ (book_characters). ai_summary и история чата — вторичны и могут содержать ошибки модели.
+6. ИСТОРИЯ ЧАТА НЕ КАНОН: прошлые ответы assistant (Морфеуса) могли быть фантазией. НИКОГДА не используй их как источник фактов о героях, сюжете или связях. Если в истории написано про часовщика, дочку Татьяну, временную петлю — это может быть ложь; не продолжай эту линию без явного текста в каноне.
+7. СПИСОК ГЕРОЕВ: если автор спрашивает «кто герои» — перечисляй ТОЛЬКО имена из блока КАНОН ПЕРСОНАЖЕЙ. Не добавляй персонажей из памяти чата. Не выдумывай внешность, рост, вес, если это не в каноне. Слова «Мне», «На», «Не», «Ну», «Почему» — не имена, даже если они встречаются в тексте.
+8. Не меняй текст глав напрямую — только обсуждение, советы и заметки.
 
 Если пользователь уходит от темы книги (погода, код, политика без связи с романом) —
 добавь в конец ответа маркер [OFF_TOPIC] (на отдельной строке).
@@ -75,10 +79,45 @@ def parse_assistant_output(raw: str) -> tuple[str, dict[str, str] | None, bool]:
     return text, note, off_topic
 
 
+def format_characters_canon(characters: list[dict[str, Any]]) -> str:
+    if not characters:
+        return ""
+    role_labels = {
+        "protagonist": "протагонист",
+        "antagonist": "антагонист",
+        "secondary": "второстепенный",
+    }
+    lines = [
+        "КАНОН ПЕРСОНАЖЕЙ (book_characters) — непреложный источник фактов о героях книги:"
+    ]
+    for row in characters:
+        name = str(row.get("name") or "").strip()
+        if not name or not is_cast_member(name):
+            continue
+        rel = row.get("relations_json") or {}
+        if isinstance(rel, str):
+            try:
+                rel = json.loads(rel)
+            except (json.JSONDecodeError, TypeError):
+                rel = {}
+        if not isinstance(rel, dict):
+            rel = {}
+        rel_str = ", ".join(f"{k}: {v}" for k, v in rel.items()) if rel else "—"
+        role = role_labels.get(str(row.get("role_type") or ""), "персонаж")
+        summary = str(row.get("summary") or "").strip()
+        lines.append(f"• {row.get('name')} ({role}): {summary}")
+        lines.append(f"  Связи: {rel_str}. Первое появление: {row.get('first_ch_id') or '—'}")
+        bio = str(row.get("bio") or "").strip()
+        if bio:
+            lines.append(f"  Подробно: {bio[:600]}")
+    return "\n".join(lines)
+
+
 def build_chat_messages(
     author_name: str,
     book_title: str,
     ai_summary: str,
+    characters: list[dict[str, Any]],
     history: list[dict[str, Any]],
     user_message: str,
 ) -> list[dict[str, str]]:
@@ -90,6 +129,16 @@ def build_chat_messages(
         context_parts.append(f"Краткая память о книге (ai_summary):\n{ai_summary.strip()}")
     else:
         context_parts.append("Краткая память о книге пока пуста.")
+    canon = format_characters_canon(characters)
+    if canon:
+        context_parts.append(canon)
+    else:
+        context_parts.append("Канон персонажей (book_characters) пока пуст.")
+
+    context_parts.append(
+        "При вопросе о героях книги отвечай строго по блоку КАНОН ПЕРСОНАЖЕЙ выше. "
+        "Не дополняй список из ai_summary или из прошлых ответов в истории чата."
+    )
 
     system = MORPHEUS_SYSTEM + "\n\n" + "\n\n".join(context_parts)
     messages: list[dict[str, str]] = [{"role": "system", "content": system}]
@@ -164,20 +213,23 @@ def summarize_book_memory(
     recent_messages: list[dict[str, Any]],
 ) -> tuple[str, str, int, int]:
     dialog_lines = []
-    for row in recent_messages[-6:]:
-        who = "Автор" if row.get("sender") == "user" else "Морфеус"
-        dialog_lines.append(f"{who}: {row.get('message', '')}")
-    dialog = "\n".join(dialog_lines)
+    for row in recent_messages[-12:]:
+        if row.get("sender") != "user":
+            continue
+        dialog_lines.append(f"Автор: {row.get('message', '')}")
+    dialog = "\n".join(dialog_lines) or "(нет новых сообщений автора)"
 
     prompt = f"""Книга: {book_title}
 
 Текущая краткая память (ai_summary):
 {current_summary or '(пусто)'}
 
-Новый фрагмент диалога:
+Новые сообщения АВТОРА (не копируй ответы Морфеуса — они могли быть ошибочны):
 {dialog}
 
-Обнови краткое содержание книги для ИИ-памяти: сюжет, персонажи, открытые идеи, канон.
+Обнови краткое содержание книги для ИИ-памяти: сюжет, персонажи, открытые идеи.
+Записывай только факты, которые автор явно сообщил, или которые уже в текущей памяти и не противоречат канону.
+Не выдумывай часовщиков, дочек, временные петли и прочую мистику, если автор этого не писал.
 Не более 500 слов. Только текст summary, без markdown и пояснений."""
 
     messages = [
@@ -191,10 +243,13 @@ def chat_reply(
     author_name: str,
     book_title: str,
     ai_summary: str,
+    characters: list[dict[str, Any]],
     history: list[dict[str, Any]],
     user_message: str,
 ) -> tuple[str, dict[str, str] | None, bool, str, int, int]:
-    messages = build_chat_messages(author_name, book_title, ai_summary, history, user_message)
+    messages = build_chat_messages(
+        author_name, book_title, ai_summary, characters, history, user_message
+    )
     raw, model, tokens_in, tokens_out = call_openrouter_chat(messages)
     clean, note, off_topic = parse_assistant_output(raw)
     return clean, note, off_topic, model, tokens_in, tokens_out

@@ -452,13 +452,26 @@ def insert_chat_message(
     return dict(row)
 
 
+def delete_chat_messages(conn: psycopg.Connection, book_id: int) -> int:
+    rows = conn.execute(
+        """
+        DELETE FROM book_chat_messages
+        WHERE book_id = %s
+        RETURNING id
+        """,
+        (book_id,),
+    ).fetchall()
+    return len(rows)
+
+
 def fetch_book_notes(conn: psycopg.Connection, book_id: int) -> list[dict[str, Any]]:
     rows = conn.execute(
         """
-        SELECT id, book_id, title, content, created_at, updated_at
+        SELECT id, book_id, title, content, sort_order, is_section,
+               created_at, updated_at
         FROM book_notes
         WHERE book_id = %s
-        ORDER BY updated_at DESC
+        ORDER BY sort_order ASC, id ASC
         """,
         (book_id,),
     ).fetchall()
@@ -468,7 +481,8 @@ def fetch_book_notes(conn: psycopg.Connection, book_id: int) -> list[dict[str, A
 def fetch_book_note(conn: psycopg.Connection, book_id: int, note_id: int) -> dict[str, Any] | None:
     row = conn.execute(
         """
-        SELECT id, book_id, title, content, created_at, updated_at
+        SELECT id, book_id, title, content, sort_order, is_section,
+               created_at, updated_at
         FROM book_notes
         WHERE book_id = %s AND id = %s
         """,
@@ -478,17 +492,61 @@ def fetch_book_note(conn: psycopg.Connection, book_id: int, note_id: int) -> dic
 
 
 def insert_book_note(
-    conn: psycopg.Connection, book_id: int, title: str, content: str
+    conn: psycopg.Connection,
+    book_id: int,
+    title: str,
+    content: str,
+    sort_order: int | None = None,
+    is_section: bool = False,
 ) -> dict[str, Any]:
+    if sort_order is None:
+        row = conn.execute(
+            "SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM book_notes WHERE book_id = %s",
+            (book_id,),
+        ).fetchone()
+        sort_order = int(row["n"] if row else 0)
     row = conn.execute(
         """
-        INSERT INTO book_notes (book_id, title, content)
-        VALUES (%s, %s, %s)
-        RETURNING id, book_id, title, content, created_at, updated_at
+        INSERT INTO book_notes (book_id, title, content, sort_order, is_section)
+        VALUES (%s, %s, %s, %s, %s)
+        RETURNING id, book_id, title, content, sort_order, is_section,
+                  created_at, updated_at
         """,
-        (book_id, title[:255], content),
+        (book_id, title[:255], content, sort_order, is_section),
     ).fetchone()
     return dict(row)
+
+
+def update_book_note(
+    conn: psycopg.Connection,
+    book_id: int,
+    note_id: int,
+    title: str,
+    content: str,
+) -> dict[str, Any] | None:
+    row = conn.execute(
+        """
+        UPDATE book_notes
+        SET title = %s, content = %s, updated_at = NOW()
+        WHERE book_id = %s AND id = %s
+        RETURNING id, book_id, title, content, sort_order, is_section,
+                  created_at, updated_at
+        """,
+        (title[:255], content, book_id, note_id),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def delete_book_note(conn: psycopg.Connection, book_id: int, note_id: int) -> bool:
+    row = conn.execute(
+        """
+        DELETE FROM book_notes
+        WHERE book_id = %s AND id = %s
+        RETURNING id
+        """,
+        (book_id, note_id),
+    ).fetchone()
+    return row is not None
 
 
 def update_user_profile(
@@ -507,3 +565,191 @@ def update_user_profile(
         """,
         (first_name or None, last_name or None, patronymic or None, display, user_id),
     )
+
+
+def fetch_book_characters(conn: psycopg.Connection, book_id: int) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT id, book_id, name, role_type, summary, bio, relations_json,
+               first_ch_id, color, avatar_url, created_at, updated_at
+        FROM book_characters
+        WHERE book_id = %s
+        ORDER BY
+            CASE role_type
+                WHEN 'protagonist' THEN 0
+                WHEN 'antagonist' THEN 1
+                ELSE 2
+            END,
+            name
+        """,
+        (book_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def fetch_book_character(
+    conn: psycopg.Connection, book_id: int, character_id: int
+) -> dict[str, Any] | None:
+    row = conn.execute(
+        """
+        SELECT id, book_id, name, role_type, summary, bio, relations_json,
+               first_ch_id, color, avatar_url, created_at, updated_at
+        FROM book_characters
+        WHERE book_id = %s AND id = %s
+        """,
+        (book_id, character_id),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def insert_book_character(
+    conn: psycopg.Connection,
+    book_id: int,
+    name: str,
+    role_type: str,
+    summary: str,
+    bio: str = "",
+    relations: dict[str, Any] | None = None,
+    first_ch_id: str | None = None,
+    color: str = "#888888",
+    avatar_url: str | None = None,
+) -> dict[str, Any]:
+    import json
+
+    row = conn.execute(
+        """
+        INSERT INTO book_characters (
+            book_id, name, role_type, summary, bio, relations_json,
+            first_ch_id, color, avatar_url, updated_at
+        )
+        VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, NOW())
+        RETURNING id, book_id, name, role_type, summary, bio, relations_json,
+                  first_ch_id, color, avatar_url, created_at, updated_at
+        """,
+        (
+            book_id,
+            name[:120],
+            role_type,
+            summary[:300],
+            bio or "",
+            json.dumps(relations or {}, ensure_ascii=False),
+            first_ch_id,
+            color[:7] if color else "#888888",
+            avatar_url,
+        ),
+    ).fetchone()
+    return dict(row)
+
+
+def update_book_character(
+    conn: psycopg.Connection,
+    book_id: int,
+    character_id: int,
+    *,
+    name: str,
+    role_type: str,
+    summary: str,
+    bio: str = "",
+    relations: dict[str, Any] | None = None,
+    first_ch_id: str | None = None,
+    color: str = "#888888",
+    avatar_url: str | None = None,
+) -> dict[str, Any] | None:
+    import json
+
+    row = conn.execute(
+        """
+        UPDATE book_characters
+        SET name = %s, role_type = %s, summary = %s, bio = %s,
+            relations_json = %s::jsonb, first_ch_id = %s, color = %s,
+            avatar_url = COALESCE(%s, avatar_url), updated_at = NOW()
+        WHERE book_id = %s AND id = %s
+        RETURNING id, book_id, name, role_type, summary, bio, relations_json,
+                  first_ch_id, color, avatar_url, created_at, updated_at
+        """,
+        (
+            name[:120],
+            role_type,
+            summary[:300],
+            bio or "",
+            json.dumps(relations or {}, ensure_ascii=False),
+            first_ch_id,
+            color[:7] if color else "#888888",
+            avatar_url,
+            book_id,
+            character_id,
+        ),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def update_book_character_avatar(
+    conn: psycopg.Connection, book_id: int, character_id: int, avatar_url: str
+) -> dict[str, Any] | None:
+    row = conn.execute(
+        """
+        UPDATE book_characters
+        SET avatar_url = %s, updated_at = NOW()
+        WHERE book_id = %s AND id = %s
+        RETURNING id, book_id, name, role_type, summary, bio, relations_json,
+                  first_ch_id, color, avatar_url, created_at, updated_at
+        """,
+        (avatar_url, book_id, character_id),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def upsert_book_character_by_name(
+    conn: psycopg.Connection,
+    book_id: int,
+    name: str,
+    role_type: str,
+    summary: str,
+    bio: str = "",
+    relations: dict[str, Any] | None = None,
+    first_ch_id: str | None = None,
+    color: str = "#888888",
+) -> dict[str, Any]:
+    import json
+
+    row = conn.execute(
+        """
+        INSERT INTO book_characters (
+            book_id, name, role_type, summary, bio, relations_json,
+            first_ch_id, color, updated_at
+        )
+        VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, NOW())
+        ON CONFLICT (book_id, name) DO UPDATE SET
+            summary = EXCLUDED.summary,
+            bio = CASE WHEN book_characters.bio = '' THEN EXCLUDED.bio ELSE book_characters.bio END,
+            role_type = EXCLUDED.role_type,
+            first_ch_id = COALESCE(EXCLUDED.first_ch_id, book_characters.first_ch_id),
+            color = EXCLUDED.color,
+            updated_at = NOW()
+        RETURNING id, book_id, name, role_type, summary, bio, relations_json,
+                  first_ch_id, color, avatar_url, created_at, updated_at
+        """,
+        (
+            book_id,
+            name[:120],
+            role_type,
+            summary[:300],
+            bio or "",
+            json.dumps(relations or {}, ensure_ascii=False),
+            first_ch_id,
+            color[:7] if color else "#888888",
+        ),
+    ).fetchone()
+    return dict(row)
+
+
+def delete_book_character(conn: psycopg.Connection, book_id: int, character_id: int) -> bool:
+    row = conn.execute(
+        """
+        DELETE FROM book_characters
+        WHERE book_id = %s AND id = %s
+        RETURNING id
+        """,
+        (book_id, character_id),
+    ).fetchone()
+    return row is not None
