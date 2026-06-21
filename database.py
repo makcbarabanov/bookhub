@@ -372,12 +372,12 @@ def count_ai_refresh_since(conn: psycopg.Connection, user_id: int, since_hours: 
     return int(row["cnt"]) if row else 0
 
 
-def count_ai_refresh_since(conn: psycopg.Connection, user_id: int, since_hours: int = 1) -> int:
+def count_chapter_ai_since(conn: psycopg.Connection, user_id: int, since_hours: int = 1) -> int:
     row = conn.execute(
         """
         SELECT COUNT(*) AS cnt FROM ai_usage_log
         WHERE user_id = %s
-          AND endpoint = 'ai-analysis-refresh'
+          AND endpoint IN ('ai-chapter-errors', 'ai-chapter-plot')
           AND created_at > NOW() - make_interval(hours => %s)
         """,
         (user_id, since_hours),

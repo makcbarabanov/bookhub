@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="14:45">
+  <defs>
+    <linearGradient id="gold" x1="8%" y1="12%" x2="92%" y2="88%">
+      <stop offset="0%" stop-color="#b45309"/>
+      <stop offset="38%" stop-color="#d97706"/>
+      <stop offset="68%" stop-color="#fbbf24"/>
+      <stop offset="100%" stop-color="#f59e0b"/>
+    </linearGradient>
+    <radialGradient id="bgGlow" cx="50%" cy="38%" r="62%">
+      <stop offset="0%" stop-color="#2a2118"/>
+      <stop offset="100%" stop-color="#0f0f11"/>
+    </radialGradient>
+  </defs>
+  <rect width="512" height="512" rx="108" fill="url(#bgGlow)"/>
+  <rect x="28" y="28" width="456" height="456" rx="92" fill="none" stroke="#3a3a40" stroke-width="5"/>
+  <text
+    x="256"
+    y="292"
+    text-anchor="middle"
+    font-family="Georgia, 'Times New Roman', 'Palatino Linotype', serif"
+    font-size="132"
+    font-weight="700"
+    fill="url(#gold)"
+    letter-spacing="-2"
+  >14:45</text>
+</svg>

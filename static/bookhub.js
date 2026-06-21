@@ -7,9 +7,14 @@
     var DEBOUNCE_MS = 1500;
     var LS_ACTIVE = 'bookhub_active_ch';
     var LS_OFFLINE = 'bookhub_offline_queue';
-    var CHAPTER_MARKERS = ['🟢', '🟡', '⚪'];
+    var CHAPTER_MARKERS = ['🟢', '🟡', '🟠', '🔴', '🟣', '🔵', '⚪'];
     var loggedIn = false;
     var activeMarkerMenu = null;
+    var voiceDictation = {
+        recognition: null,
+        listening: false,
+        finalTextLen: 0,
+    };
 
     var state = {
         book: null,
@@ -25,6 +30,8 @@
         activeServicePanel: null,
         aiAnalysis: null,
         aiLoading: false,
+        contentStale: false,
+        chapterAiLoading: {},
         chatLoading: false,
         chatSending: false,
         characters: [],
@@ -558,8 +565,14 @@
         window.openTab = function (tabId, element) {
             if (state.dirty && state.activeChId) flushSave();
             if (state.serviceDirty) flushServiceSave();
-            state.activeChId = null;
-            state.activeServicePanel = null;
+            if (/^ch\d+$/.test(tabId)) {
+                state.activeChId = tabId;
+                state.activeServicePanel = null;
+                try { sessionStorage.setItem(LS_ACTIVE, tabId); } catch (e) {}
+            } else {
+                state.activeChId = null;
+                state.activeServicePanel = tabId;
+            }
             if (tabId === 'ai-advice') {
                 loadAiAnalysis();
                 loadChatHistory();
@@ -572,6 +585,7 @@
             }
             maybeCollapseSidebarForMobile();
             origOpenTab(tabId, element);
+            updateChapterVoiceBar();
         };
         window.__openTabWrapped = true;
         bindChatUi();
@@ -834,6 +848,247 @@
         });
     }
 
+    function appendAiErrorCard(container, err, opts) {
+        opts = opts || {};
+        var card = document.createElement('div');
+        card.className = 'ai-card sev-' + (err.severity || 'medium');
+        card.innerHTML =
+            '<div class="ai-card-head"><span>' + typeLabel(err.type) +
+            (opts.inline ? '' : (' · ' + escapeHtml(err.ch_id))) +
+            '</span><span>' + escapeHtml(err.severity) + '</span></div>' +
+            '<div class="ai-card-finding">' + escapeHtml(err.finding) + '</div>';
+        if (err.context) {
+            var quote = document.createElement('div');
+            quote.className = 'ai-card-quote';
+            quote.textContent = err.context;
+            card.appendChild(quote);
+        }
+        var actions = document.createElement('div');
+        actions.className = 'ai-card-actions';
+        if (!opts.inline && err.ch_id) {
+            var openBtn = document.createElement('button');
+            openBtn.type = 'button';
+            openBtn.className = 'btn-ai-open-ch';
+            openBtn.textContent = 'Открыть главу';
+            openBtn.addEventListener('click', function () { openChapterFromAi(err.ch_id); });
+            actions.appendChild(openBtn);
+        }
+        var canFix = err.type === 'language' &&
+            (err.old_text || (err.fix_options && err.fix_options.length) || err.new_text);
+        if (canFix) {
+            var applyBtn = document.createElement('button');
+            applyBtn.type = 'button';
+            applyBtn.className = 'btn-ai-apply';
+            applyBtn.textContent = '✓ Исправить';
+            applyBtn.addEventListener('click', function () { applyAiFix(err); });
+            actions.appendChild(applyBtn);
+        }
+        var leaveBtn = document.createElement('button');
+        leaveBtn.type = 'button';
+        leaveBtn.className = 'btn-ai-leave';
+        leaveBtn.textContent = 'Оставить';
+        leaveBtn.title = 'Оставить текст как есть и убрать замечание';
+        leaveBtn.addEventListener('click', function () { dismissAiError(err); });
+        actions.appendChild(leaveBtn);
+        card.appendChild(actions);
+        container.appendChild(card);
+    }
+
+    function chapterPlotHasContent(plot) {
+        if (!plot || typeof plot !== 'object') return false;
+        if (plot.conflict || plot.pacing || plot.hook || plot.summary) return true;
+        return !!(plot.ideas && plot.ideas.length);
+    }
+
+    function renderChapterPlotBlock(container, plot, emptyHint) {
+        container.innerHTML = '';
+        if (!chapterPlotHasContent(plot)) {
+            container.innerHTML = '<div class="ai-empty chapter-ai-empty">' +
+                escapeHtml(emptyHint || 'Нажмите «Сюжет», чтобы получить разбор главы.') + '</div>';
+            return;
+        }
+        function row(label, text) {
+            if (!text) return;
+            var d = document.createElement('div');
+            d.className = 'chapter-plot-row';
+            d.innerHTML =
+                '<span class="chapter-plot-label">' + escapeHtml(label) + '</span>' +
+                '<span class="chapter-plot-value">' + escapeHtml(text) + '</span>';
+            container.appendChild(d);
+        }
+        row('Конфликт', plot.conflict);
+        row('Темп', plot.pacing);
+        row('Крючок', plot.hook);
+        if (plot.summary) {
+            var sum = document.createElement('div');
+            sum.className = 'chapter-plot-summary';
+            sum.textContent = plot.summary;
+            container.appendChild(sum);
+        }
+        var ideas = plot.ideas || [];
+        if (ideas.length) {
+            var ih = document.createElement('h5');
+            ih.className = 'chapter-plot-ideas-title';
+            ih.textContent = 'Идеи';
+            container.appendChild(ih);
+            ideas.forEach(function (idea) {
+                var el = document.createElement('div');
+                el.className = 'ai-idea-item';
+                el.textContent = idea;
+                container.appendChild(el);
+            });
+        }
+    }
+
+    function bindChapterAiPanel(panel, chId) {
+        if (panel.__bound) return;
+        panel.__bound = true;
+        panel.querySelectorAll('.btn-chapter-ai').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                var kind = btn.getAttribute('data-kind');
+                if (kind === 'errors') refreshChapterAiErrors(chId, btn);
+                else if (kind === 'plot') refreshChapterAiPlot(chId, btn);
+            });
+        });
+    }
+
+    function ensureChapterAiPanel(chId) {
+        if (!/^ch\d+$/.test(chId)) return null;
+        var container = getChapterContainer(chId);
+        if (!container) return null;
+        var panel = container.querySelector('.chapter-ai-panel');
+        if (!panel) {
+            panel = document.createElement('div');
+            panel.className = 'chapter-ai-panel';
+            panel.setAttribute('data-ch-id', chId);
+            panel.innerHTML =
+                '<div class="chapter-ai-toolbar">' +
+                '<button type="button" class="btn-chapter-ai" data-kind="errors">Правки</button>' +
+                '<button type="button" class="btn-chapter-ai" data-kind="plot">Сюжет</button>' +
+                '</div>' +
+                '<div class="chapter-ai-loading" style="display:none">Анализ главы… до 2 минут</div>' +
+                '<div class="chapter-ai-errors"></div>' +
+                '<div class="chapter-ai-plot"></div>';
+            bindChapterAiPanel(panel, chId);
+            container.appendChild(panel);
+        }
+        return panel;
+    }
+
+    function setChapterAiLoading(chId, on) {
+        state.chapterAiLoading[chId] = !!on;
+        var panel = document.querySelector('#' + chId + ' .chapter-ai-panel');
+        if (!panel) return;
+        var loading = panel.querySelector('.chapter-ai-loading');
+        if (loading) loading.style.display = on ? 'block' : 'none';
+        panel.querySelectorAll('.btn-chapter-ai').forEach(function (b) {
+            b.disabled = !!on;
+        });
+    }
+
+    function renderChapterAiPanel(chId) {
+        if (!/^ch\d+$/.test(chId)) return;
+        var panel = ensureChapterAiPanel(chId);
+        if (!panel) return;
+        var errBox = panel.querySelector('.chapter-ai-errors');
+        var plotBox = panel.querySelector('.chapter-ai-plot');
+        var a = state.aiAnalysis && state.aiAnalysis.analysis;
+        if (errBox) {
+            errBox.innerHTML = '';
+            var errors = (a && a.errors) ? a.errors.filter(function (e) { return e.ch_id === chId; }) : [];
+            if (!errors.length) {
+                errBox.innerHTML = '<div class="ai-empty chapter-ai-empty">Нажмите «Правки», чтобы проанализировать главу.</div>';
+            } else {
+                errors.forEach(function (err) {
+                    appendAiErrorCard(errBox, err, { inline: true });
+                });
+            }
+        }
+        if (plotBox) {
+            var plot = a && a.chapter_plots ? a.chapter_plots[chId] : null;
+            renderChapterPlotBlock(plotBox, plot);
+        }
+    }
+
+    function parseApiErrorMessage(err) {
+        var raw = (err && err.message) || '';
+        if (!raw) return 'Неизвестная ошибка';
+        try {
+            var j = JSON.parse(raw);
+            if (j && j.detail) {
+                return typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail);
+            }
+        } catch (e) {}
+        if (raw.indexOf('504') >= 0 || raw.indexOf('Gateway Time-out') >= 0) {
+            return 'Сервер не дождался ответа ИИ (таймаут nginx). Повторите через минуту.';
+        }
+        if (raw.indexOf('502') >= 0 && raw.indexOf('Bad Gateway') >= 0) {
+            return 'Шлюз не получил ответ от приложения. Возможно, анализ ещё идёт — подождите и обновите страницу.';
+        }
+        if (raw.indexOf('OPENROUTER_API_KEY') >= 0) {
+            return 'OPENROUTER_API_KEY не задан в .env на сервере.';
+        }
+        if (raw.indexOf('OpenRouter') >= 0) {
+            var m = raw.match(/OpenRouter[^"]*/);
+            if (m) return m[0].slice(0, 400);
+        }
+        return raw.length > 400 ? raw.slice(0, 397) + '…' : raw;
+    }
+
+    function showChapterAiError(err) {
+        var msg = parseApiErrorMessage(err);
+        if (msg.indexOf('429') >= 0 || msg.indexOf('limit') >= 0 || msg.indexOf('Chapter AI') >= 0) {
+            showAppNotice({
+                variant: 'info',
+                title: 'Лимит анализа глав',
+                message: 'Не больше 20 запросов «Правки»/«Сюжет» в час. Подождите немного.',
+            });
+        } else if (msg.indexOf('таймаут') >= 0 || msg.indexOf('504') >= 0 || msg.indexOf('Gateway') >= 0) {
+            showAppNotice({
+                variant: 'info',
+                title: 'Долгий анализ',
+                message: msg,
+            });
+        } else {
+            showAppNotice({
+                variant: 'danger',
+                message: msg || 'Не удалось проанализировать главу.',
+            });
+        }
+    }
+
+    function refreshChapterAiErrors(chId, btn) {
+        if (state.chapterAiLoading[chId]) return;
+        setChapterAiLoading(chId, true);
+        apiFetch('/api/v1/chapters/' + encodeURIComponent(chId) + '/ai-analysis/errors', { method: 'POST' })
+            .then(function (data) {
+                if (data.ai_analysis) {
+                    state.aiAnalysis = data.ai_analysis;
+                    renderAiAnalysis(state.aiAnalysis);
+                }
+                renderChapterAiPanel(chId);
+                state.contentStale = false;
+            })
+            .catch(showChapterAiError)
+            .finally(function () { setChapterAiLoading(chId, false); });
+    }
+
+    function refreshChapterAiPlot(chId, btn) {
+        if (state.chapterAiLoading[chId]) return;
+        setChapterAiLoading(chId, true);
+        apiFetch('/api/v1/chapters/' + encodeURIComponent(chId) + '/ai-analysis/plot', { method: 'POST' })
+            .then(function (data) {
+                if (data.ai_analysis) {
+                    state.aiAnalysis = data.ai_analysis;
+                    renderAiAnalysis(state.aiAnalysis);
+                }
+                renderChapterAiPanel(chId);
+                state.contentStale = false;
+            })
+            .catch(showChapterAiError)
+            .finally(function () { setChapterAiLoading(chId, false); });
+    }
+
     function renderAiAnalysis(payload) {
         var emptyEl = document.getElementById('ai-analysis-empty');
         var metaEl = document.getElementById('ai-analysis-meta');
@@ -849,6 +1104,9 @@
             var plotClear = document.getElementById('ai-section-plot');
             if (plotClear) plotClear.innerHTML = '';
             updateAiTabCounts(null);
+            if (state.activeChId && /^ch\d+$/.test(state.activeChId)) {
+                renderChapterAiPanel(state.activeChId);
+            }
             return;
         }
 
@@ -875,56 +1133,52 @@
                 errSec.innerHTML = '<div class="ai-empty">Замечаний не найдено.</div>';
             }
             errors.forEach(function (err) {
-                var card = document.createElement('div');
-                card.className = 'ai-card sev-' + (err.severity || 'medium');
-                card.innerHTML =
-                    '<div class="ai-card-head"><span>' + typeLabel(err.type) + ' · ' +
-                    escapeHtml(err.ch_id) + '</span><span>' + escapeHtml(err.severity) + '</span></div>' +
-                    '<div class="ai-card-finding">' + escapeHtml(err.finding) + '</div>';
-                if (err.context) {
-                    var quote = document.createElement('div');
-                    quote.className = 'ai-card-quote';
-                    quote.textContent = err.context;
-                    card.appendChild(quote);
-                }
-                var actions = document.createElement('div');
-                actions.className = 'ai-card-actions';
-                if (err.ch_id) {
-                    var openBtn = document.createElement('button');
-                    openBtn.type = 'button';
-                    openBtn.className = 'btn-ai-open-ch';
-                    openBtn.textContent = 'Открыть главу';
-                    openBtn.addEventListener('click', function () { openChapterFromAi(err.ch_id); });
-                    actions.appendChild(openBtn);
-                }
-                var canFix = err.type === 'language' && (err.old_text || (err.fix_options && err.fix_options.length) || err.new_text);
-                if (canFix) {
-                    var applyBtn = document.createElement('button');
-                    applyBtn.type = 'button';
-                    applyBtn.className = 'btn-ai-apply';
-                    applyBtn.textContent = '✓ Исправить';
-                    applyBtn.addEventListener('click', function () { applyAiFix(err); });
-                    actions.appendChild(applyBtn);
-                }
-                var leaveBtn = document.createElement('button');
-                leaveBtn.type = 'button';
-                leaveBtn.className = 'btn-ai-leave';
-                leaveBtn.textContent = 'Оставить';
-                leaveBtn.title = 'Оставить текст как есть и убрать замечание';
-                leaveBtn.addEventListener('click', function () { dismissAiError(err); });
-                actions.appendChild(leaveBtn);
-                card.appendChild(actions);
-                errSec.appendChild(card);
+                appendAiErrorCard(errSec, err, { inline: false });
             });
         }
 
         var plotSec = document.getElementById('ai-section-plot');
         if (plotSec) {
             plotSec.innerHTML = '';
+            var chapterPlots = a.chapter_plots || {};
+            var plotChIds = Object.keys(chapterPlots).filter(function (id) {
+                return chapterPlotHasContent(chapterPlots[id]);
+            }).sort(function (a, b) {
+                var na = parseInt(a.replace(/\D/g, ''), 10) || 0;
+                var nb = parseInt(b.replace(/\D/g, ''), 10) || 0;
+                return na - nb;
+            });
+            if (plotChIds.length) {
+                var cph = document.createElement('h4');
+                cph.textContent = 'Сюжет по главам';
+                plotSec.appendChild(cph);
+                plotChIds.forEach(function (chId) {
+                    var block = document.createElement('div');
+                    block.className = 'chapter-plot-global-block';
+                    var head = document.createElement('div');
+                    head.className = 'chapter-plot-global-head';
+                    var idx = chapterIndex(chId);
+                    var title = idx >= 0 ? formatChapterTitle(idx, state.chapters[idx].title) : chId;
+                    head.innerHTML = '<span>' + escapeHtml(title) + '</span>';
+                    var openBtn = document.createElement('button');
+                    openBtn.type = 'button';
+                    openBtn.className = 'btn-ai-open-ch';
+                    openBtn.textContent = 'Открыть';
+                    openBtn.addEventListener('click', function () { openChapterFromAi(chId); });
+                    head.appendChild(openBtn);
+                    block.appendChild(head);
+                    var body = document.createElement('div');
+                    body.className = 'chapter-plot-global-body';
+                    renderChapterPlotBlock(body, chapterPlots[chId], '');
+                    block.appendChild(body);
+                    plotSec.appendChild(block);
+                });
+            }
             var strengths = a.strengths || [];
             if (strengths.length) {
                 var sh = document.createElement('h4');
                 sh.textContent = 'Сильные стороны';
+                sh.style.marginTop = plotChIds.length ? '20px' : '0';
                 plotSec.appendChild(sh);
                 strengths.forEach(function (s) {
                     var el = document.createElement('div');
@@ -973,6 +1227,10 @@
                 el.appendChild(ideaActions);
                 plotSec.appendChild(el);
             });
+        }
+
+        if (state.activeChId && /^ch\d+$/.test(state.activeChId)) {
+            renderChapterAiPanel(state.activeChId);
         }
     }
 
@@ -1102,9 +1360,19 @@
         }
     }
 
+    function countChapterPlots(analysis) {
+        var n = 0;
+        var cp = (analysis && analysis.chapter_plots) ? analysis.chapter_plots : {};
+        Object.keys(cp).forEach(function (id) {
+            if (chapterPlotHasContent(cp[id])) n += 1;
+        });
+        return n;
+    }
+
     function updateAiTabCounts(analysis) {
         var errCount = (analysis && analysis.errors) ? analysis.errors.length : 0;
         var plotCount = (analysis && analysis.plot_ideas) ? analysis.plot_ideas.length : 0;
+        plotCount += countChapterPlots(analysis);
         var errTab = document.querySelector('.ai-tab[data-ai-tab="errors"]');
         var plotTab = document.querySelector('.ai-tab[data-ai-tab="plot"]');
         if (errTab) errTab.textContent = 'Правки (' + errCount + ')';
@@ -1309,8 +1577,12 @@
         return apiFetch('/api/v1/book/ai-analysis').then(function (data) {
             if (!state.book || state.book.id !== bookId) return;
             if (data.book_id && data.book_id !== bookId) return;
+            state.contentStale = !!data.content_stale;
             state.aiAnalysis = data.ai_analysis || null;
             renderAiAnalysis(state.aiAnalysis);
+            if (state.contentStale && !state.aiLoading) {
+                refreshAiAnalysis(null);
+            }
         }).catch(function () {
             if (state.book && state.book.id === bookId) {
                 state.aiAnalysis = null;
@@ -1327,6 +1599,7 @@
         apiFetch('/api/v1/book/ai-analysis/refresh', { method: 'POST' })
             .then(function (data) {
                 if (!state.book || state.book.id !== bookId) return;
+                state.contentStale = false;
                 state.aiAnalysis = data.ai_analysis || null;
                 renderAiAnalysis(state.aiAnalysis);
             })
@@ -1413,6 +1686,288 @@
         if (!sel) return;
         sel.removeAllRanges();
         sel.addRange(range);
+    }
+
+    function getSpeechRecognitionClass() {
+        return window.SpeechRecognition || window.webkitSpeechRecognition || null;
+    }
+
+    function getChapterBodyForDictation() {
+        if (!state.activeChId || state.locked) return null;
+        var container = getChapterContainer(state.activeChId);
+        return ensureMaxText(container);
+    }
+
+    function isPlaceholderBody(body) {
+        if (!body) return false;
+        var text = (body.textContent || '').trim();
+        return !text || text === 'Текст главы…';
+    }
+
+    function clearPlaceholderIfNeeded(body) {
+        if (isPlaceholderBody(body)) {
+            body.textContent = '';
+        }
+    }
+
+    function ensureCursorInBody(body) {
+        var sel = window.getSelection();
+        if (!sel) return;
+        if (sel.rangeCount && body.contains(sel.anchorNode)) return;
+        body.focus();
+        var range = document.createRange();
+        range.selectNodeContents(body);
+        range.collapse(false);
+        sel.removeAllRanges();
+        sel.addRange(range);
+    }
+
+    function insertDictationText(rawText) {
+        var body = getChapterBodyForDictation();
+        if (!body) return;
+        var chunk = (rawText || '').replace(/\s+/g, ' ').trim();
+        if (!chunk) return;
+
+        clearPlaceholderIfNeeded(body);
+        ensureCursorInBody(body);
+
+        var sel = window.getSelection();
+        if (!sel || !sel.rangeCount) return;
+        var range = sel.getRangeAt(0);
+        var node = range.startContainer;
+        var offset = range.startOffset;
+        var before = '';
+        if (node.nodeType === Node.TEXT_NODE && offset > 0) {
+            before = node.textContent.charAt(offset - 1);
+        } else if (node.nodeType === Node.ELEMENT_NODE && offset > 0) {
+            var prev = node.childNodes[offset - 1];
+            if (prev && prev.nodeType === Node.TEXT_NODE) {
+                before = prev.textContent.slice(-1);
+            }
+        }
+        var prefix = (before && !/\s/.test(before)) ? ' ' : '';
+        var textNode = document.createTextNode(prefix + chunk);
+        range.insertNode(textNode);
+        range.setStartAfter(textNode);
+        range.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(range);
+        scheduleSave();
+    }
+
+    function resetVoiceSessionState() {
+        voiceDictation.finalTextLen = 0;
+    }
+
+    function handleVoiceRecognitionResult(event) {
+        var interim = '';
+        var sessionFinal = '';
+
+        for (var i = 0; i < event.results.length; i++) {
+            var result = event.results[i];
+            var piece = result[0] ? result[0].transcript : '';
+            if (result.isFinal) {
+                sessionFinal = piece;
+            } else {
+                interim += piece;
+            }
+        }
+
+        if (sessionFinal.length < voiceDictation.finalTextLen) {
+            resetVoiceSessionState();
+        }
+
+        if (sessionFinal.length > voiceDictation.finalTextLen) {
+            insertDictationText(sessionFinal.slice(voiceDictation.finalTextLen));
+            voiceDictation.finalTextLen = sessionFinal.length;
+        }
+
+        if (voiceDictation.listening) {
+            setVoiceStatus(interim.trim() ? interim.trim() : 'Слушаю…');
+        }
+    }
+
+    function setVoiceStatus(text) {
+        var el = document.getElementById('chapter-voice-status');
+        if (el) el.textContent = text || '';
+    }
+
+    function updateVoiceButtonUi() {
+        var btn = document.getElementById('btn-chapter-voice');
+        if (!btn) return;
+        btn.classList.toggle('is-listening', voiceDictation.listening);
+        var icon = btn.querySelector('[aria-hidden="true"]');
+        if (icon) icon.textContent = voiceDictation.listening ? '⏹' : '🎤';
+        btn.title = voiceDictation.listening
+            ? 'Остановить диктовку'
+            : 'Голосовой ввод';
+        btn.setAttribute('aria-label', btn.title);
+    }
+
+    function stopVoiceDictation() {
+        voiceDictation.listening = false;
+        if (voiceDictation.recognition) {
+            try { voiceDictation.recognition.stop(); } catch (e) {}
+        }
+        resetVoiceSessionState();
+        updateVoiceButtonUi();
+        setVoiceStatus('');
+    }
+
+    function startVoiceDictation() {
+        if (state.locked) {
+            showAppNotice({
+                variant: 'info',
+                message: 'Разблокируйте редактирование (🔓), чтобы диктовать текст.',
+            });
+            return;
+        }
+        var SpeechRecognition = getSpeechRecognitionClass();
+        if (!SpeechRecognition) {
+            showAppNotice({
+                variant: 'danger',
+                message: 'Голосовой ввод не поддерживается в этом браузере. Попробуйте Chrome на Android или Chrome/Edge на компьютере.',
+            });
+            return;
+        }
+        var body = getChapterBodyForDictation();
+        if (!body) return;
+
+        clearPlaceholderIfNeeded(body);
+        ensureCursorInBody(body);
+
+        if (!voiceDictation.recognition) {
+            var recognition = new SpeechRecognition();
+            recognition.lang = 'ru-RU';
+            recognition.continuous = true;
+            recognition.interimResults = true;
+            recognition.onstart = function () {
+                resetVoiceSessionState();
+            };
+            recognition.onresult = handleVoiceRecognitionResult;
+            recognition.onerror = function (event) {
+                if (event.error === 'not-allowed') {
+                    showAppNotice({
+                        variant: 'danger',
+                        message: 'Разрешите доступ к микрофону в настройках браузера.',
+                    });
+                    stopVoiceDictation();
+                } else if (event.error === 'service-not-allowed') {
+                    showAppNotice({
+                        variant: 'danger',
+                        message: 'Голосовой ввод доступен только по HTTPS или на localhost.',
+                    });
+                    stopVoiceDictation();
+                } else if (event.error !== 'no-speech' && event.error !== 'aborted') {
+                    setVoiceStatus('');
+                }
+            };
+            recognition.onend = function () {
+                if (voiceDictation.listening) {
+                    try { recognition.start(); } catch (e) {}
+                }
+            };
+            voiceDictation.recognition = recognition;
+        }
+
+        voiceDictation.listening = true;
+        resetVoiceSessionState();
+        updateVoiceButtonUi();
+        setVoiceStatus('Слушаю…');
+        try {
+            voiceDictation.recognition.start();
+        } catch (e) {
+            stopVoiceDictation();
+            showAppNotice({
+                variant: 'danger',
+                message: 'Не удалось запустить микрофон. Проверьте разрешения браузера.',
+            });
+        }
+    }
+
+    function toggleVoiceDictation() {
+        if (voiceDictation.listening) {
+            stopVoiceDictation();
+        } else {
+            startVoiceDictation();
+        }
+    }
+
+    function canShowVoiceFab() {
+        if (state.locked) return false;
+        var chId = state.activeChId;
+        if (!chId || !/^ch\d+$/.test(chId)) return false;
+        if (state.activeServicePanel) return false;
+
+        var container = getChapterContainer(chId);
+        if (!container || container.classList.contains('service-panel')) return false;
+        if (container.style.display === 'none') return false;
+
+        var login = document.getElementById('login-overlay');
+        if (login && login.style.display !== 'none') return false;
+
+        if (isMobileLayout() && !document.body.classList.contains('sidebar-collapsed')) {
+            return false;
+        }
+
+        return true;
+    }
+
+    function chapterDisplayNumber(chId) {
+        var idx = chapterIndex(chId);
+        if (idx >= 0) return idx + 1;
+        var m = /^ch(\d+)$/.exec(chId || '');
+        return m ? parseInt(m[1], 10) : null;
+    }
+
+    function updateChapterVoiceBar() {
+        var fab = document.getElementById('chapter-voice-fab');
+        if (!fab) return;
+        var chId = state.activeChId;
+        var show = canShowVoiceFab();
+        fab.hidden = !show;
+        fab.classList.toggle('visible', show);
+
+        var badge = document.getElementById('chapter-voice-chapter');
+        var btn = document.getElementById('btn-chapter-voice');
+        if (badge) {
+            var num = chId ? chapterDisplayNumber(chId) : null;
+            badge.textContent = num != null ? String(num) : '?';
+            var idx = chapterIndex(chId);
+            if (idx >= 0 && state.chapters[idx]) {
+                badge.title = formatChapterTitle(idx, state.chapters[idx].title);
+            } else if (num != null) {
+                badge.title = 'Глава ' + num;
+            } else {
+                badge.title = '';
+            }
+        }
+        if (btn && chId) {
+            var chIdx = chapterIndex(chId);
+            var label = chIdx >= 0
+                ? ('Диктовка в главу ' + (chIdx + 1))
+                : 'Голосовой ввод';
+            if (!voiceDictation.listening) {
+                btn.title = label;
+                btn.setAttribute('aria-label', label);
+            }
+        }
+
+        if (!show) stopVoiceDictation();
+    }
+
+    function bindChapterVoice() {
+        var btn = document.getElementById('btn-chapter-voice');
+        if (!btn || btn.__bookhubBound) return;
+        btn.__bookhubBound = true;
+        btn.addEventListener('click', function (e) {
+            e.preventDefault();
+            toggleVoiceDictation();
+        });
+        if (!window.__bookhubVoiceResizeBound) {
+            window.__bookhubVoiceResizeBound = true;
+            window.addEventListener('resize', updateChapterVoiceBar);
+        }
     }
 
     function commitChapterTitle(chId, rawTitle, source) {
@@ -1517,6 +2072,8 @@
         while (wrap.firstChild) el.appendChild(wrap.firstChild);
         ensureMaxText(el);
         normalizeChapterContent(el);
+        ensureChapterAiPanel(chId);
+        renderChapterAiPanel(chId);
         applyEditableState();
     }
 
@@ -1880,6 +2437,7 @@
         var body = document.createElement('div');
         body.className = 'max-text';
         el.appendChild(body);
+        ensureChapterAiPanel(ch.ch_id);
         scroll.appendChild(el);
         return el;
     }
@@ -1912,6 +2470,9 @@
         if (pane) pane.scrollTop = 0;
 
         loadChapterContent(chId);
+        ensureChapterAiPanel(chId);
+        renderChapterAiPanel(chId);
+        updateChapterVoiceBar();
     }
 
     function loadChapterContent(chId) {
@@ -1980,6 +2541,7 @@
             bindAutosave();
             flushOfflineQueue();
             setSaveStatus('saved');
+            updateChapterVoiceBar();
         });
     }
 
@@ -1994,6 +2556,7 @@
         document.querySelectorAll('.nav-drag').forEach(function (el) {
             el.draggable = editable;
         });
+        updateChapterVoiceBar();
     }
 
     function bindLock() {
@@ -2058,6 +2621,7 @@
             btn.title = collapsed ? 'Развернуть панель' : 'Свернуть панель';
             btn.textContent = collapsed ? '▶' : '◀';
             try { localStorage.setItem(LS_SIDEBAR, collapsed ? '1' : '0'); } catch (e) {}
+            updateChapterVoiceBar();
         }
 
         window.bookhubSetSidebarCollapsed = setCollapsed;
@@ -2631,6 +3195,7 @@
         bindExport();
         bindImport();
         bindAddChapter();
+        bindChapterVoice();
         bindProfile();
         bindServicePanels();
         bindAppVersion();

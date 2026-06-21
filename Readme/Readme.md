@@ -104,6 +104,33 @@ python3 -c "from dotenv import load_dotenv; load_dotenv(); from database import 
 
 ---
 
+## Cursor / AI-агент на проде
+
+**Workspace Cursor = прод-сервер.** Репозиторий открыт там же, где крутится BookHub:
+
+| | |
+|---|---|
+| Хост | `island` (Timeweb, `188.225.44.48`) |
+| Путь | `/home/makc/Projects/bookhub` |
+| Контейнер | `docker compose` → `bookhub` на `:8001` |
+| Домен | https://book.islanddream.ru |
+
+Агент в этой сессии **редактирует файлы на месте** и **может сам** пересобирать приложение:
+
+```bash
+cd /home/makc/Projects/bookhub && docker compose up -d --build
+```
+
+Git — бэкап после рабочего сеанса; **`git pull` на прод не используется** (разработка direct-to-prod).
+
+Подробная матрица «что агент делает сам / что только вручную» — в разделе ниже (заполняется совместно).
+
+### Возможности и ограничения прода на сервере
+
+> *Черновик — дополним после согласования с автором.*
+
+---
+
 ## Документация
 
 - [Tables.md](./Tables.md) — схема PostgreSQL

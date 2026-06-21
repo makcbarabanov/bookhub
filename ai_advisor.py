@@ -101,7 +101,7 @@ def build_book_prompt(
     return "\n".join(parts)
 
 
-def _extract_json(raw: str) -> dict[str, Any]:
+def _parse_json_object(raw: str) -> dict[str, Any]:
     text = (raw or "").strip()
     if text.startswith("```"):
         text = re.sub(r"^```(?:json)?\s*", "", text)
@@ -109,7 +109,11 @@ def _extract_json(raw: str) -> dict[str, Any]:
     data = json.loads(text)
     if not isinstance(data, dict):
         raise ValueError("AI response is not a JSON object")
-    return _normalize_analysis(data)
+    return data
+
+
+def _extract_json(raw: str) -> dict[str, Any]:
+    return _normalize_analysis(_parse_json_object(raw))
 
 
 def _parse_fix_options(finding: str, old_text: str, new_text: str) -> list[str]:
@@ -265,10 +269,16 @@ def _normalize_analysis(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def call_openrouter_analysis(user_prompt: str) -> tuple[dict[str, Any], str, int, int]:
+    return call_openrouter_json(user_prompt, SYSTEM_PROMPT)
+
+
+def call_openrouter_json(
+    user_prompt: str, system_prompt: str
+) -> tuple[dict[str, Any], str, int, int]:
     payload = {
         "model": _model(),
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
         "temperature": 0.3,
@@ -301,8 +311,11 @@ def call_openrouter_analysis(user_prompt: str) -> tuple[dict[str, Any], str, int
             usage = data.get("usage") or {}
             tokens_in = int(usage.get("prompt_tokens") or 0)
             tokens_out = int(usage.get("completion_tokens") or 0)
-            analysis = _extract_json(content)
-            return analysis, _model(), tokens_in, tokens_out
+            if system_prompt == SYSTEM_PROMPT:
+                analysis = _extract_json(content)
+                return analysis, _model(), tokens_in, tokens_out
+            data = _parse_json_object(content)
+            return data, _model(), tokens_in, tokens_out
         except urllib.error.HTTPError as e:
             detail = e.read().decode("utf-8", errors="replace")[:800]
             last_error = RuntimeError(f"OpenRouter HTTP {e.code}: {detail}")
@@ -335,6 +348,142 @@ def analyze_book(
 ) -> tuple[dict[str, Any], str, int, int]:
     prompt = build_book_prompt(book_title, chapters, checklist_html, heroes_text)
     return call_openrouter_analysis(prompt)
+
+
+CHAPTER_ERRORS_SYSTEM = """Ты литературный редактор русскоязычного романа.
+Анализируй ТОЛЬКО одну главу из запроса. Не выдумывай факты.
+Фокус: орфография, пунктуация, грамматика, стиль, явные логические огрехи внутри главы.
+Ответ — только валидный JSON без markdown:
+{
+  "errors": [
+    {
+      "type": "language|plot|character|fact",
+      "severity": "high|medium|low",
+      "ch_id": "ch1",
+      "finding": "краткое описание",
+      "context": "дословная цитата (1-3 предложения)",
+      "old_text": "фрагмент для замены (только language)",
+      "new_text": "исправление (только language)",
+      "can_apply": true
+    }
+  ]
+}
+До 8 errors. ch_id каждой ошибки = ch_id из запроса.
+can_apply=true только если type=language и old_text точно в context."""
+
+
+CHAPTER_PLOT_SYSTEM = """Ты литературный редактор и dramaturg.
+Оцени сюжет ОДНОЙ главы: конфликт, темп, крючок для читателя.
+Не выдумывай события вне текста главы.
+Ответ — только валидный JSON без markdown:
+{
+  "conflict": "главное напряжение или конфликт главы",
+  "pacing": "slow|medium|fast",
+  "hook": "чем глава удерживает читателя / крючок",
+  "summary": "2-3 предложения о сюжетной функции главы",
+  "ideas": ["совет по усилению", "ещё один совет"]
+}
+ideas — до 4 коротких советов."""
+
+
+def _chapter_context_block(
+    book_title: str,
+    chapter: dict[str, Any],
+    notes: str,
+    heroes: str,
+) -> str:
+    ch_id = str(chapter.get("ch_id") or "")
+    plain = html_to_plain(chapter.get("content") or "")
+    if len(plain) > MAX_CHAPTER_CHARS:
+        plain = plain[:MAX_CHAPTER_CHARS] + "\n[…обрезано…]"
+    return "\n".join(
+        [
+            f"# Книга: {book_title}",
+            "",
+            "## Заметки автора (контекст)",
+            (notes or "").strip()[:6000] or "(пусто)",
+            "",
+            "## Герои (кратко)",
+            (heroes or "").strip()[:4000] or "(пусто)",
+            "",
+            f"## Глава {ch_id} | {chapter.get('title', '')}",
+            plain,
+            "",
+            f"ch_id для ответа: {ch_id}",
+        ]
+    )
+
+
+def _normalize_chapter_errors(data: dict[str, Any], ch_id: str) -> list[dict[str, Any]]:
+    normalized = _normalize_analysis({"errors": data.get("errors") or []})
+    errors = normalized.get("errors") or []
+    for err in errors:
+        err["ch_id"] = ch_id
+    return errors
+
+
+def _normalize_chapter_plot(data: dict[str, Any]) -> dict[str, Any]:
+    pacing = str(data.get("pacing") or "medium")
+    if pacing not in ("slow", "medium", "fast"):
+        pacing = "medium"
+    ideas = data.get("ideas") or []
+    if not isinstance(ideas, list):
+        ideas = []
+    clean_ideas = [str(i).strip() for i in ideas[:4] if str(i).strip()]
+    return {
+        "conflict": str(data.get("conflict") or "").strip(),
+        "pacing": pacing,
+        "hook": str(data.get("hook") or "").strip(),
+        "summary": str(data.get("summary") or "").strip(),
+        "ideas": clean_ideas,
+    }
+
+
+def analyze_chapter_errors(
+    book_title: str,
+    chapter: dict[str, Any],
+    notes: str,
+    heroes: str,
+) -> tuple[list[dict[str, Any]], str, int, int]:
+    ch_id = str(chapter.get("ch_id") or "")
+    prompt = _chapter_context_block(book_title, chapter, notes, heroes)
+    data, model, tokens_in, tokens_out = call_openrouter_json(
+        prompt, CHAPTER_ERRORS_SYSTEM
+    )
+    return _normalize_chapter_errors(data, ch_id), model, tokens_in, tokens_out
+
+
+def analyze_chapter_plot(
+    book_title: str,
+    chapter: dict[str, Any],
+    notes: str,
+    heroes: str,
+) -> tuple[dict[str, Any], str, int, int]:
+    prompt = _chapter_context_block(book_title, chapter, notes, heroes)
+    data, model, tokens_in, tokens_out = call_openrouter_json(
+        prompt, CHAPTER_PLOT_SYSTEM
+    )
+    return _normalize_chapter_plot(data), model, tokens_in, tokens_out
+
+
+def merge_chapter_errors(
+    analysis: dict[str, Any], ch_id: str, new_errors: list[dict[str, Any]]
+) -> dict[str, Any]:
+    kept = [e for e in (analysis.get("errors") or []) if e.get("ch_id") != ch_id]
+    kept.extend(new_errors)
+    analysis["errors"] = kept
+    return analysis
+
+
+def merge_chapter_plot(
+    analysis: dict[str, Any], ch_id: str, plot: dict[str, Any]
+) -> dict[str, Any]:
+    chapter_plots = analysis.get("chapter_plots")
+    if not isinstance(chapter_plots, dict):
+        chapter_plots = {}
+    chapter_plots[ch_id] = plot
+    analysis["chapter_plots"] = chapter_plots
+    return analysis
 
 
 def _norm_ws(text: str) -> str:

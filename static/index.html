@@ -1,10 +1,14 @@
 <!DOCTYPE html>
-<html lang="ru" data-app-version="17:35" data-theme="dark"><head>
+<html lang="ru" data-app-version="15:16" data-theme="dark"><head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="app-version" content="17:35">
+    <meta name="app-version" content="15:16">
     <title>14:45 — BookHub</title>
-    <link rel="icon" href="favicon.svg" type="image/svg+xml">
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+    <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+    <link rel="manifest" href="/static/manifest.webmanifest">
+    <meta name="theme-color" content="#0f0f11">
+    <meta name="apple-mobile-web-app-title" content="14:45">
     <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600&amp;family=Inter:wght@300;400;600&amp;display=swap" rel="stylesheet">
     <style>
         :root,
@@ -893,6 +897,89 @@
             font-family: inherit;
         }
         .btn-ai-apply:hover { background: rgba(76, 175, 80, 0.22); }
+        .chapter-ai-panel {
+            margin-top: 28px;
+            padding-top: 20px;
+            border-top: 1px solid rgba(255,255,255,0.08);
+        }
+        .chapter-ai-toolbar {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-bottom: 12px;
+        }
+        .btn-chapter-ai {
+            border: 1px solid rgba(255, 183, 77, 0.45);
+            background: rgba(255, 183, 77, 0.1);
+            color: var(--accent-amber);
+            border-radius: 8px;
+            padding: 8px 16px;
+            font-size: 13px;
+            cursor: pointer;
+            font-family: inherit;
+        }
+        .btn-chapter-ai:hover:not(:disabled) {
+            background: rgba(255, 183, 77, 0.18);
+        }
+        .btn-chapter-ai:disabled {
+            opacity: 0.5;
+            cursor: wait;
+        }
+        .chapter-ai-loading {
+            color: var(--accent-amber);
+            font-size: 13px;
+            margin-bottom: 10px;
+        }
+        .chapter-ai-empty {
+            padding: 8px 0 4px;
+            font-size: 13px;
+        }
+        .chapter-ai-errors .ai-card:last-child,
+        .chapter-ai-plot .ai-idea-item:last-child {
+            margin-bottom: 0;
+        }
+        .chapter-plot-row {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 8px;
+            font-size: 14px;
+            line-height: 1.45;
+        }
+        .chapter-plot-label {
+            flex: 0 0 72px;
+            color: var(--text-muted);
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+        .chapter-plot-value { flex: 1; }
+        .chapter-plot-summary {
+            font-size: 14px;
+            line-height: 1.5;
+            margin: 10px 0;
+            color: var(--text-main);
+        }
+        .chapter-plot-ideas-title {
+            margin: 12px 0 6px;
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+        .chapter-plot-global-block {
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 12px 14px;
+            margin-bottom: 12px;
+            background: rgba(255,255,255,0.02);
+        }
+        .chapter-plot-global-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            margin-bottom: 10px;
+            font-weight: 600;
+            font-size: 14px;
+        }
         .btn-ai-open-ch {
             border: 1px dashed #555;
             background: transparent;
@@ -1579,6 +1666,106 @@
             border-color: var(--accent-amber);
             color: var(--accent-amber);
         }
+        .chapter-voice-fab {
+            position: fixed;
+            right: calc(18px + env(safe-area-inset-right, 0px));
+            bottom: calc(28px + env(safe-area-inset-bottom, 0px));
+            z-index: 240;
+            display: none;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 8px;
+            pointer-events: none;
+            overflow: visible;
+        }
+        .chapter-voice-fab.visible {
+            display: flex;
+        }
+        .chapter-voice-fab-btn-wrap {
+            position: relative;
+            pointer-events: auto;
+            overflow: visible;
+        }
+        .btn-chapter-voice {
+            pointer-events: auto;
+            width: 54px;
+            height: 54px;
+            border-radius: 50%;
+            border: 1px solid var(--border);
+            background: var(--bg-panel);
+            color: var(--text-main);
+            padding: 0;
+            font-size: 24px;
+            line-height: 1;
+            cursor: pointer;
+            font-family: inherit;
+            flex-shrink: 0;
+            -webkit-appearance: none;
+            appearance: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
+        }
+        .btn-chapter-voice:hover {
+            border-color: var(--accent-amber);
+            color: var(--accent-amber);
+        }
+        .btn-chapter-voice.is-listening {
+            border-color: #e53935;
+            color: #fff;
+            background: #e53935;
+            animation: voice-fab-pulse 1.2s ease-in-out infinite;
+        }
+        .chapter-voice-chapter-badge {
+            position: absolute;
+            bottom: -4px;
+            right: -4px;
+            top: auto;
+            min-width: 24px;
+            height: 24px;
+            padding: 0 6px;
+            border-radius: 12px;
+            background: var(--accent-amber);
+            color: #111;
+            font-size: 12px;
+            font-weight: 700;
+            line-height: 24px;
+            text-align: center;
+            border: 2px solid #fff;
+            box-sizing: border-box;
+            pointer-events: none;
+            z-index: 2;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .btn-chapter-voice.is-listening + .chapter-voice-chapter-badge {
+            background: #fff;
+            color: #e53935;
+        }
+        @keyframes voice-fab-pulse {
+            0%, 100% { box-shadow: 0 4px 18px rgba(229, 57, 53, 0.35); }
+            50% { box-shadow: 0 4px 22px rgba(229, 57, 53, 0.65); }
+        }
+        .chapter-voice-status {
+            pointer-events: none;
+            max-width: min(240px, 72vw);
+            padding: 6px 10px;
+            border-radius: 8px;
+            background: var(--bg-panel);
+            border: 1px solid var(--border);
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+            font-size: 12px;
+            color: var(--text-muted);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .chapter-voice-status:empty {
+            display: none;
+        }
 
         .checklist-header {
             display: flex;
@@ -1741,6 +1928,7 @@
             overflow-y: auto;
             overflow-x: hidden;
             overscroll-behavior: contain;
+            -webkit-overflow-scrolling: touch;
         }
         .sidebar-book.collapsed .service-accordion-body {
             flex: 0;
@@ -1930,6 +2118,61 @@
             .modal-box--profile {
                 width: calc(100vw - 16px);
                 max-height: calc(100dvh - 24px);
+            }
+            body,
+            .sidebar,
+            .content {
+                height: 100dvh;
+                max-height: 100dvh;
+            }
+            body.sidebar-collapsed .content {
+                height: 100dvh;
+                max-height: 100dvh;
+            }
+            .sidebar-accordions {
+                overflow-y: auto;
+                overflow-x: hidden;
+                -webkit-overflow-scrolling: touch;
+                overscroll-behavior-y: contain;
+            }
+            .sidebar-accordion.sidebar-book {
+                flex: 0 0 auto;
+                min-height: 0;
+            }
+            .sidebar-book .service-accordion-body,
+            #book-body {
+                flex: 0 0 auto;
+                overflow: visible;
+                max-height: none;
+                padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px));
+            }
+            .sidebar-book.collapsed .service-accordion-body,
+            .sidebar-book.collapsed #book-body {
+                max-height: 0;
+                padding-bottom: 0;
+                overflow: hidden;
+            }
+            .sidebar-service .service-accordion-body {
+                max-height: none;
+            }
+            .sidebar-service.collapsed .service-accordion-body {
+                max-height: 0;
+            }
+            #nav-chapters-root {
+                padding-bottom: 8px;
+            }
+            .btn-add-chapter {
+                margin-bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+            }
+            .content-scroll {
+                padding-bottom: calc(88px + env(safe-area-inset-bottom, 0px));
+            }
+            body.sidebar-collapsed .content-scroll {
+                padding-bottom: calc(88px + env(safe-area-inset-bottom, 0px));
+            }
+            .chapter-container.active .max-text,
+            .chapter-container.active .atlas-note {
+                padding-bottom: 24px;
             }
         }
     </style>
@@ -2127,7 +2370,7 @@
                     <button type="button" class="btn-theme" id="btn-theme" title="Светлая / тёмная тема">☀️</button>
                     <button type="button" class="btn-lock" id="btn-lock" title="Заблокировать редактирование">🔓</button>
                 </div>
-                <span class="app-version" id="app-version" title="Версия деплоя">17:45</span>
+                <span class="app-version" id="app-version" title="Версия деплоя">15:16</span>
             </div>
         </div>
         <div class="export-menu" id="export-menu" role="menu" aria-label="Формат экспорта">
@@ -3279,7 +3522,7 @@
 
             var __chaptersStructureReady = false;
             var __chaptersDnDBound = false;
-            var CHAPTER_MARKERS = ['🟢', '🟡', '🔴', '🔵', '⚪'];
+            var CHAPTER_MARKERS = ['🟢', '🟡', '🟠', '🔴', '🟣', '🔵', '⚪'];
 
             function parseNavChapterItem(item) {
                 var oc = item.getAttribute('onclick') || '';
@@ -4090,6 +4333,15 @@
             }
         }
     </script>
+    <div id="chapter-voice-fab" class="chapter-voice-fab" hidden aria-live="polite">
+        <span id="chapter-voice-status" class="chapter-voice-status"></span>
+        <div class="chapter-voice-fab-btn-wrap">
+            <button type="button" id="btn-chapter-voice" class="btn-chapter-voice" title="Голосовой ввод" aria-label="Голосовой ввод">
+                <span aria-hidden="true">🎤</span>
+            </button>
+            <span id="chapter-voice-chapter" class="chapter-voice-chapter-badge">?</span>
+        </div>
+    </div>
     <script src="/static/bookhub.js"></script>
 
 </body></html>

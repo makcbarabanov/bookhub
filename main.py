@@ -18,11 +18,20 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from auth_util import verify_password
-from ai_advisor import analyze_book, apply_text_fix, verify_errors_against_chapters
+from ai_advisor import (
+    analyze_book,
+    analyze_chapter_errors,
+    analyze_chapter_plot,
+    apply_text_fix,
+    merge_chapter_errors,
+    merge_chapter_plot,
+    verify_errors_against_chapters,
+)
 from ai_assistant import chat_reply, format_characters_canon, summarize_book_memory, welcome_message
 from database import (
     ACT_LABEL_LABELS,
     count_ai_refresh_since,
+    count_chapter_ai_since,
     count_chat_send_since,
     delete_book_character,
     delete_book_note,
@@ -87,7 +96,7 @@ from notes_migrate import (
 from parser import parse_book_html
 from stats_util import measure_html, sum_measures
 
-APP_VERSION = os.environ.get("APP_VERSION", "17:45")
+APP_VERSION = os.environ.get("APP_VERSION", "15:16")
 APP_PORT = int(os.environ.get("APP_PORT", "8001"))
 SESSION_COOKIE = "bookhub_session"
 SESSION_MAX_AGE = 60 * 60 * 24 * 30
@@ -96,6 +105,8 @@ LOGIN_RATE_LIMIT = 3
 LOGIN_RATE_WINDOW = 60
 AI_REFRESH_LIMIT = int(os.environ.get("AI_REFRESH_LIMIT", "5"))
 AI_REFRESH_WINDOW_HOURS = 1
+CHAPTER_AI_LIMIT = int(os.environ.get("CHAPTER_AI_LIMIT", "20"))
+CHAPTER_AI_WINDOW_HOURS = 1
 CHAT_RATE_LIMIT = int(os.environ.get("CHAT_RATE_LIMIT", "45"))
 CHAT_RATE_WINDOW_HOURS = 1
 CHAT_MAX_MESSAGE_LEN = 4000
@@ -214,7 +225,7 @@ class ChapterReorderBody(BaseModel):
     chapter_ids: list[str]
 
 
-ALLOWED_EMOJI = {"🟢", "🟡", "⚪", "🔴", "🔵"}
+ALLOWED_EMOJI = {"🟢", "🟡", "🟠", "🔴", "🟣", "🔵", "⚪"}
 
 
 def _normalize_emoji(raw: str | None) -> str:
@@ -328,6 +339,15 @@ def _check_ai_refresh_limit(conn, user_id: int) -> None:
         raise HTTPException(
             status_code=429,
             detail=f"AI refresh limit: {AI_REFRESH_LIMIT} per hour",
+        )
+
+
+def _check_chapter_ai_limit(conn, user_id: int) -> None:
+    count = count_chapter_ai_since(conn, user_id, CHAPTER_AI_WINDOW_HOURS)
+    if count >= CHAPTER_AI_LIMIT:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Chapter AI limit: {CHAPTER_AI_LIMIT} per hour",
         )
 
 
@@ -1067,7 +1087,24 @@ def get_ai_analysis(user_id: int = Depends(verify_user_id)) -> dict[str, Any]:
             if fixed != analysis.get("errors"):
                 analysis["errors"] = fixed
                 row = update_book_analysis_json(conn, book_id, analysis) or row
-    return {"ok": True, "book_id": book_id, "ai_analysis": _analysis_payload(row)}
+        content_updated = conn.execute(
+            "SELECT MAX(updated_at) AS mx FROM chapters WHERE book_id = %s",
+            (book_id,),
+        ).fetchone()
+        content_updated_at = content_updated["mx"] if content_updated else None
+        content_stale = False
+        if content_updated_at:
+            if not row or not row.get("updated_at"):
+                content_stale = True
+            elif content_updated_at > row["updated_at"]:
+                content_stale = True
+    return {
+        "ok": True,
+        "book_id": book_id,
+        "ai_analysis": _analysis_payload(row),
+        "content_stale": content_stale,
+        "content_updated_at": _format_dt(content_updated_at),
+    }
 
 
 @app.post("/api/v1/book/ai-analysis/refresh")
@@ -1106,6 +1143,128 @@ def refresh_ai_analysis(user_id: int = Depends(verify_user_id)) -> dict[str, Any
         log_ai_usage(conn, user_id, book_id, "ai-analysis-refresh", model, tokens_in, tokens_out)
 
     return {"ok": True, "ai_analysis": _analysis_payload(row)}
+
+
+def _empty_analysis() -> dict[str, Any]:
+    return {
+        "errors": [],
+        "plot_ideas": [],
+        "chapter_plots": {},
+        "radar": {
+            "tension": 50,
+            "pacing": "medium",
+            "atmosphere": "",
+            "summary": "",
+        },
+        "chapter_radar": [],
+        "strengths": [],
+    }
+
+
+def _save_merged_analysis(
+    conn,
+    book_id: int,
+    analysis: dict[str, Any],
+    model: str,
+    tokens_in: int,
+    tokens_out: int,
+    existing_row: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if existing_row:
+        row = update_book_analysis_json(conn, book_id, analysis)
+        return row or existing_row
+    return upsert_book_analysis(conn, book_id, analysis, model, tokens_in, tokens_out)
+
+
+@app.post("/api/v1/chapters/{ch_id}/ai-analysis/errors")
+def analyze_chapter_errors_endpoint(
+    ch_id: str, user_id: int = Depends(verify_user_id)
+) -> dict[str, Any]:
+    with get_conn() as conn:
+        book_id = get_active_book_id(conn, user_id)
+        if not book_id:
+            raise HTTPException(status_code=404, detail="No books available")
+        _require_book_access(conn, user_id, book_id)
+        _check_chapter_ai_limit(conn, user_id)
+
+        chapter = fetch_chapter_by_ch_id(conn, book_id, ch_id)
+        if not chapter:
+            raise HTTPException(status_code=404, detail="Chapter not found")
+
+        book = fetch_book(conn, book_id)
+        if not book:
+            raise HTTPException(status_code=404, detail="Book not found")
+        service = fetch_book_service(conn, book_id)
+        notes_ctx = _notes_context_for_ai(conn, book_id, service)
+        heroes_ctx = _heroes_context_for_ai(conn, book_id, service)
+
+        try:
+            new_errors, model, tokens_in, tokens_out = analyze_chapter_errors(
+                book["title"],
+                chapter,
+                notes_ctx,
+                heroes_ctx,
+            )
+        except RuntimeError as e:
+            raise HTTPException(status_code=502, detail=str(e)) from e
+
+        new_errors = verify_errors_against_chapters(new_errors, [chapter])
+        existing_row = fetch_book_analysis(conn, book_id)
+        analysis = _load_analysis_dict(existing_row) if existing_row else _empty_analysis()
+        merge_chapter_errors(analysis, ch_id, new_errors)
+        row = _save_merged_analysis(
+            conn, book_id, analysis, model, tokens_in, tokens_out, existing_row
+        )
+        log_ai_usage(
+            conn, user_id, book_id, "ai-chapter-errors", model, tokens_in, tokens_out
+        )
+
+    return {"ok": True, "ch_id": ch_id, "ai_analysis": _analysis_payload(row)}
+
+
+@app.post("/api/v1/chapters/{ch_id}/ai-analysis/plot")
+def analyze_chapter_plot_endpoint(
+    ch_id: str, user_id: int = Depends(verify_user_id)
+) -> dict[str, Any]:
+    with get_conn() as conn:
+        book_id = get_active_book_id(conn, user_id)
+        if not book_id:
+            raise HTTPException(status_code=404, detail="No books available")
+        _require_book_access(conn, user_id, book_id)
+        _check_chapter_ai_limit(conn, user_id)
+
+        chapter = fetch_chapter_by_ch_id(conn, book_id, ch_id)
+        if not chapter:
+            raise HTTPException(status_code=404, detail="Chapter not found")
+
+        book = fetch_book(conn, book_id)
+        if not book:
+            raise HTTPException(status_code=404, detail="Book not found")
+        service = fetch_book_service(conn, book_id)
+        notes_ctx = _notes_context_for_ai(conn, book_id, service)
+        heroes_ctx = _heroes_context_for_ai(conn, book_id, service)
+
+        try:
+            plot, model, tokens_in, tokens_out = analyze_chapter_plot(
+                book["title"],
+                chapter,
+                notes_ctx,
+                heroes_ctx,
+            )
+        except RuntimeError as e:
+            raise HTTPException(status_code=502, detail=str(e)) from e
+
+        existing_row = fetch_book_analysis(conn, book_id)
+        analysis = _load_analysis_dict(existing_row) if existing_row else _empty_analysis()
+        merge_chapter_plot(analysis, ch_id, plot)
+        row = _save_merged_analysis(
+            conn, book_id, analysis, model, tokens_in, tokens_out, existing_row
+        )
+        log_ai_usage(
+            conn, user_id, book_id, "ai-chapter-plot", model, tokens_in, tokens_out
+        )
+
+    return {"ok": True, "ch_id": ch_id, "ai_analysis": _analysis_payload(row)}
 
 
 @app.post("/api/v1/book/ai-analysis/apply")
